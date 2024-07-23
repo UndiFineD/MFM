@@ -1,6 +1,7 @@
 /*                                              -*- mode:C++ -*-
   AbstractGUIDriver.h Base class for all GUI-based MFM drivers
-  Copyright (C) 2014 The Regents of the University of New Mexico.  All rights reserved.
+  Copyright (C) 2014,2017 The Regents of the University of New Mexico.  All rights reserved.
+  Copyright (C) 2017 Ackleyshack,LLC.  All rights reserved.
 
   This library is free software; you can redistribute it and/or
   modify it under the terms of the GNU Lesser General Public
@@ -22,7 +23,8 @@
   \file AbstractGUIDriver.h Base class for all GUI-based MFM drivers
   \author Trent R. Small.
   \author David H. Ackley.
-  \date (C) 2014 All rights reserved.
+  \author Elena S. Ackley.
+  \date (C) 2014,2017 All rights reserved.
   \lgpl
  */
 #ifndef ABSTRACTGUIDRIVER_H
@@ -54,16 +56,17 @@
 #include "VArguments.h"
 #include "SDL.h"
 #include "SDL_ttf.h"
+#include "RootPanel.h"
 #include "HelpPanel.h"
 #include "MovablePanel.h"
 #include "AbstractGUIDriverButtons.h"
 #include "AbstractGUIDriverTools.h"
 #include "GUIConstants.h"
 #include "Keyboard.h"
+#include <signal.h>   /* for signal, SIGTERM, SIGTSTP, SIGCONT */
 
 namespace MFM
 {
-
   template<class GC>
   class AbstractGUIDriver : public AbstractDriver<GC>
   {
@@ -95,7 +98,7 @@ namespace MFM
 
     Camera m_camera;
     SDL_Surface* m_screen;
-    Panel m_rootPanel;
+    RootPanel m_rootPanel;
     Drawing m_rootDrawing;
 
     u32 m_screenWidth;
@@ -105,6 +108,17 @@ namespace MFM
     s32 m_desiredScreenHeight;
 
     bool m_screenResizable;
+    bool m_screenUpdateDisabled;
+
+    static AbstractGUIDriver * m_staticSelf;
+    static void handleUSR1(int sig)
+    {
+      SetScreenUpdateDisabled(true,m_staticSelf);
+    }
+    static void handleUSR2(int sig)
+    {
+      SetScreenUpdateDisabled(false,m_staticSelf);
+    }
 
     ClearButton<GC> m_clearButton;
     ClearGridButton<GC> m_clearGridButton;
@@ -112,6 +126,7 @@ namespace MFM
     XRayButton<GC> m_xrayButton;
     ThinButton<GC> m_thinButton;
     GridRunCheckbox<GC> m_gridRunButton, m_gridRunMiniButton;
+    GridRunCheckbox2<GC> m_gridRunButton2;
     GridRenderButton<GC> m_gridRenderButton;
     CacheRenderButton<GC> m_cacheRenderButton;
     GridStepCheckbox<GC> m_gridStepButton;
@@ -129,6 +144,8 @@ namespace MFM
     ShowHelpButton<GC> m_showHelpButton, m_showHelpMiniButton;
     ShowToolboxButton<GC> m_showToolboxButton;
     ShowInfoBoxButton<GC> m_showInfoBoxButton;
+    SuppressLabelsButton<GC> m_suppressLabelsButton;
+    DrawCustomButton<GC> m_drawCustomButton;
     LoadDriverSectionButton<GC> m_loadDriverSectionButton;
     LoadGridSectionButton<GC> m_loadGridSectionButton;
     LoadGUISectionButton<GC> m_loadGUISectionButton;
@@ -162,13 +179,44 @@ namespace MFM
     IncreaseAEPSPerFrame<GC> m_increaseAEPSPerFrame;
     DecreaseAEPSPerFrame<GC> m_decreaseAEPSPerFrame;
 
-  public:
+    Mutex m_snapshotAccess;
+    bool m_snapshotRequested;
+    OString512 m_snapshotPath;
 
+  public:
+    static AbstractGUIDriver * getSelf() { return m_staticSelf; }
+    
     const Panel & GetRootPanel() const { return m_rootPanel; }
     Panel & GetRootPanel() { return m_rootPanel; }
 
     const GridPanel<GC> & GetGridPanel() const { return m_gridPanel; }
     GridPanel<GC> & GetGridPanel() { return m_gridPanel; }
+
+    virtual void RequestSnapshot(ByteSource & path) {
+      if (m_snapshotAccess.TryLock()) { // don't block if busy
+        m_snapshotRequested = true;
+        m_snapshotPath.Reset();
+        m_snapshotPath.Copy(path);
+        MFM_API_ASSERT_ARG(!m_snapshotPath.HasOverflowed());
+        m_snapshotAccess.Unlock();
+      }
+    }
+
+    bool TakeSnapshotIfRequested() {
+      Mutex::ScopeLock lock(m_snapshotAccess);
+      bool ret = false;
+      if (m_pastFirstUpdate && m_snapshotRequested) {
+        TakeSnapshot(m_snapshotPath.GetZString());
+        ret = true;
+      }
+      return ret;
+    }
+
+    void TakeSnapshot(const char * path) {
+      MFM_API_ASSERT_NONNULL(path);
+      MFM_API_ASSERT_NONNULL(m_screen);
+      m_camera.DrawSurface(m_screen, path);
+    }
 
     void RequestReinit()
     {
@@ -201,17 +249,17 @@ namespace MFM
     {
       m_gridPanel.InitAtomViewPanels(Super::GetGrid(), &m_gridToolAtomView);
       //      m_gridToolAtomView.SetAtomViewPanel(m_gridPanel.GetAtomViewPanel(0));
-      InsertAndRegisterGridTool(m_gridToolPencil);
-      InsertAndRegisterGridTool(m_gridToolEraser);
+      InsertAndRegisterGridTool(m_gridToolPencil);     // on '1'
+      InsertAndRegisterGridTool(m_gridToolEraser);     // on '2'
+      InsertAndRegisterGridTool(m_gridToolEvent);      // on '3'
+      InsertAndRegisterGridTool(m_gridToolAtomView);   // on '4'
+      InsertAndRegisterGridTool(m_gridToolTileSelect); // on '5'
       // XXX Consider killing the brush to make room for the spark
       //      InsertAndRegisterGridTool(m_gridToolBrush);
       InsertAndRegisterGridTool(m_gridToolAirBrush);
       InsertAndRegisterGridTool(m_gridToolXRay);
       InsertAndRegisterGridTool(m_gridToolBucket);
       InsertAndRegisterGridTool(m_gridToolClone);
-      InsertAndRegisterGridTool(m_gridToolEvent);
-      InsertAndRegisterGridTool(m_gridToolAtomView);
-      InsertAndRegisterGridTool(m_gridToolTileSelect);
     }
 
     void OnceOnlyButtons()
@@ -234,12 +282,16 @@ namespace MFM
       InsertAndRegisterButton(m_gridRenderButton);
       InsertAndRegisterButton(m_cacheRenderButton);
       InsertAndRegisterButton(m_gridRunButton);
+      InsertAndRegisterButton(m_gridRunButton2);
       InsertAndRegisterButton(m_bgrButton);
       InsertAndRegisterButton(m_fgrButton);
       InsertAndRegisterButton(m_logButton);
       InsertAndRegisterButton(m_showHelpButton);
       InsertAndRegisterButton(m_showToolboxButton);
       InsertAndRegisterButton(m_showInfoBoxButton);
+
+      InsertAndRegisterButton(m_suppressLabelsButton);
+      InsertAndRegisterButton(m_drawCustomButton);
 
       InsertAndRegisterButton(m_loadDriverSectionButton);
       InsertAndRegisterButton(m_loadGridSectionButton);
@@ -436,15 +488,6 @@ namespace MFM
 
     virtual void PostUpdate()
     {
-#if 0 // stats panel now renders the live data.
-      /* Update the stats renderer */
-      m_statisticsPanel.SetAEPS(Super::GetAEPS());
-      m_statisticsPanel.SetAER(Super::GetRecentAER());  // Use backwards averaged value
-      m_statisticsPanel.SetAEPSPerFrame(Super::GetAEPSPerFrame());
-      m_statisticsPanel.SetCurrentAEPSPerEpoch(this->GetAEPSPerEpoch());
-      m_statisticsPanel.SetOverheadPercent(Super::GetOverheadPercent());
-      //      m_statisticsPanel.SetOverheadPercent(Super::GetGrid().GetAverageCacheRedundancy());
-#endif
     }
 
     u32 GetThisEpochAEPS() const
@@ -504,7 +547,7 @@ namespace MFM
           for (s32 rev = MFM_VERSION_REV; rev >= 0; --rev)
           {
             buff.Reset();
-            buff.Printf("mfs/start-%d.%d.%d.mfs", 
+            buff.Printf("mfs/start-%d.%d.%d.mfs",
                         MFM_VERSION_MAJOR,
                         MFM_VERSION_MINOR,
                         rev);
@@ -542,34 +585,19 @@ namespace MFM
 
       if (m_batchMode)
       {
-        /* Special disgusting hacks to run SDL in ncurses, but then
-           suppress the ncurses output, so that we can run what looks
-           like a 'GUI' to SDL with no actual display anywhere.  Is
-           there not some less-disgusting SDL1.2 way to do this??
+        /* Is there not some less-disgusting SDL1.2 way to do this??
         */
 
-        // Step 1: Hack environmental variables to pick driver
-        if (!getenv("CACA_DRIVER") && !getenv("SDL_VIDEODRIVER"))
+        if (!getenv("SDL_VIDEODRIVER"))
         {
-          putenv((char *) "CACA_DRIVER=ncurses");
-          putenv((char *) "SDL_VIDEODRIVER=caca");
+          putenv((char *) "SDL_VIDEODRIVER=dummy");
         }
         else
         {
-          fprintf(stderr,"CACA_DRIVER and/or SDL_VIDEODRIVER set in env; could not set batchmode\n");
+          fprintf(stderr,"SDL_VIDEODRIVER set in env; could not set batchmode\n");
           exit(-1);
         }
 
-        // Step 2: Temporarily dump stdout
-
-        s32 newdesc;
-        fflush(stdout);
-        m_backupStdout = dup(1);
-        newdesc = open("/dev/null", O_WRONLY);
-        dup2(newdesc, 1);
-        close(newdesc);
-
-        // Step 3: Initialize SDL
         if ( SDL_Init(0) == -1)
         {
           fprintf(stderr,"Could not initialize SDL: %s.\n", SDL_GetError());
@@ -583,7 +611,15 @@ namespace MFM
       }
       else
       {
-        SDL_Init(SDL_INIT_EVERYTHING);
+	u32 flags =SDL_INIT_TIMER|SDL_INIT_VIDEO;
+        int ret = SDL_Init(flags);
+	if (ret)
+	{
+	  LOG.Error("SDL_Init(0x%x) failed: %s",
+		    flags,
+		    SDL_GetError());
+	  FAIL(ILLEGAL_STATE);
+	}
       }
 
       TTF_Init();
@@ -658,21 +694,6 @@ namespace MFM
 
       // Again to 'set' stuff?
       SetScreenSize(m_screenWidth, m_screenHeight);
-
-      if (m_batchMode)
-      {
-        /* Unhook our secret wires, since hopefully the ncurses
-           initialization is done by now, and we won't actually draw
-           anything on it later anyway?
-        */
-        if (m_backupStdout >= 0)
-        {
-          fflush(stdout);
-          dup2(m_backupStdout, 1);
-          close(m_backupStdout);
-          m_backupStdout = -1;
-        }
-      }
 
     }
 
@@ -837,8 +858,8 @@ namespace MFM
       return true;
     }
 
-    AbstractGUIDriver(u32 gridWidth, u32 gridHeight)
-      : Super(gridWidth, gridHeight)
+    AbstractGUIDriver(u32 gridWidth, u32 gridHeight, GridLayoutPattern gridLayout)
+      : Super(gridWidth, gridHeight, gridLayout)
       , m_startPaused(true)
       , m_thisUpdateIsEpoch(false)
       , m_bigText(false)
@@ -861,12 +882,14 @@ namespace MFM
       , m_desiredScreenWidth(-1)
       , m_desiredScreenHeight(-1)
       , m_screenResizable(true)
+      , m_screenUpdateDisabled(false)
       , m_clearButton()
       , m_clearGridButton()
       , m_nukeButton()
       , m_xrayButton()
       , m_thinButton()
       , m_gridRunButton()
+      , m_gridRunButton2()
       , m_gridRenderButton()
       , m_cacheRenderButton()
       , m_gridStepButton()
@@ -910,15 +933,19 @@ namespace MFM
       , m_displayAER(m_statisticsPanel)
       , m_increaseAEPSPerFrame(*this)
       , m_decreaseAEPSPerFrame(*this)
+      , m_snapshotRequested(false)
       , m_buttonPanel("ButtonPanel",false)
       , m_miniButtonPanel("miniButtonPanel",true)
       , m_externalConfigSectionGUI(AbstractDriver<GC>::GetExternalConfig(),*this)
     {
+      m_snapshotPath.Reset();
       m_startFile.Reset();
+      m_staticSelf = this;
+      signal(SIGUSR1, AbstractGUIDriver::handleUSR1);
+      signal(SIGUSR2, AbstractGUIDriver::handleUSR2);
     }
 
-    ~AbstractGUIDriver()
-    { }
+    virtual ~AbstractGUIDriver() { }
 
     virtual void ReinitUs()
     {
@@ -1049,6 +1076,9 @@ namespace MFM
       VArguments& args = driver->m_varguments;
 
       s32 out;
+      if(*str == '{')
+	str++;  //ELENA?
+
       const char * errmsg = AbstractDriver<GC>::GetNumberFromString(str, out, 0, 10000);
       if (errmsg)
       {
@@ -1084,6 +1114,13 @@ namespace MFM
       AbstractGUIDriver& driver = *((AbstractGUIDriver*)driverptr);
 
       driver.m_startPaused = false;
+    }
+
+    static void SetScreenUpdateDisabled(const bool value, void* driverptr)
+    {
+      AbstractGUIDriver& driver = *((AbstractGUIDriver*)driverptr);
+
+      driver.m_screenUpdateDisabled = value;
     }
 
     static void DontShowHelpPanelOnStart(const char* not_used, void* driverptr)
@@ -1139,7 +1176,7 @@ namespace MFM
                              "--run", &SetStartPausedFromArgs, this, false);
 
       this->RegisterArgument("Help panel is not shown upon startup.",
-                             "-n| --nohelp", &DontShowHelpPanelOnStart, this, false);
+                             "-n|--nohelp", &DontShowHelpPanelOnStart, this, false);
 
       this->RegisterArgument("Increase button and text size.",
                              "--bigtext", &SetIncreaseTextSizeFlag, this, false);
@@ -1170,6 +1207,15 @@ namespace MFM
       if (m_screenResizable) flags |= SDL_RESIZABLE;
       m_screen = SDL_SetVideoMode(m_screenWidth, m_screenHeight, 32, flags);
 
+      if (m_screen == 0)
+      {
+        LOG.Error("SDL_SetVideoMode(%d,%d,32,0x%x) failed: %s",
+		  m_screenWidth, m_screenHeight, flags,
+		  SDL_GetError());
+        FAIL(ILLEGAL_STATE);
+      }
+
+
       u32 gotWidth = SDL_GetVideoSurface()->w;
       u32 gotHeight = SDL_GetVideoSurface()->h;
       if (gotWidth != m_screenWidth || gotHeight != m_screenHeight)
@@ -1178,11 +1224,6 @@ namespace MFM
                     m_screenWidth, m_screenHeight);
 
       AssetManager::Initialize();
-
-      if (m_screen == 0)
-      {
-        FAIL(ILLEGAL_STATE);
-      }
 
       UPoint newDimensions(width, height);
 
@@ -1334,11 +1375,12 @@ namespace MFM
         }
         Update(Super::GetGrid());
 
-        m_pastFirstUpdate = true;
-
         m_rootDrawing.Clear();
-
         m_rootPanel.Paint(m_rootDrawing);
+
+        TakeSnapshotIfRequested();
+
+        m_pastFirstUpdate = true;
 
         if (m_thisUpdateIsEpoch)
         {
@@ -1350,8 +1392,12 @@ namespace MFM
           }
         }
 
-        running = this->RunHelperExiter();
-        SDL_Flip(m_screen);
+        bool wantOut = this->RunHelperExiter();
+        running &= wantOut;  // Don't reset running if it was already false
+        if (!m_screenUpdateDisabled)
+        {
+          SDL_Flip(m_screen);
+        }
       }
 
       AssetManager::Destroy();
@@ -1367,6 +1413,10 @@ namespace MFM
     void SetLoadGUISection(bool val) { m_externalConfigSectionGUI.SetEnabled(val); }
 
   };
+
+  template<class GC>
+  AbstractGUIDriver<GC> * AbstractGUIDriver<GC>::m_staticSelf = 0;
+
 } /* namespace MFM */
 
 #endif /* ABSTRACTGUIDRIVER_H */

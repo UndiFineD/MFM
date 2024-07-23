@@ -43,6 +43,11 @@ namespace MFM
   template <class EC>
   class Element_Data : public Element<EC>
   {
+  public:
+    virtual u32 GetTypeFromThisElement() const {
+      return 0xCE04;
+    }
+    
     enum {  DATA_VERSION = 2 };
 
     // Extract short names for parameter types
@@ -125,7 +130,7 @@ namespace MFM
              "at random when created by an emitter atom.";
     }
 
-    virtual u32 GetAtomColor(const T& atom, u32 selector) const
+    virtual u32 GetAtomColor(const ElementTable<EC> & et, const UlamClassRegistry<EC> & ucr, const T& atom, u32 selector) const
     {
       switch (selector)
       {

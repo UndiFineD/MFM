@@ -49,7 +49,7 @@ namespace MFM
 
     void GenerateHelpText()
     {
-      Super::TextPanelByteSink & bs = Super::GetByteSink();
+      ResettableByteSink & bs = Super::GetByteSink();
       bs.Reset();
       m_keyboard.PrintHelp(bs);
       m_isGenerated = true;
@@ -67,6 +67,8 @@ namespace MFM
       Panel::SetBackground(Drawing::DARK_PURPLE);
       Panel::SetForeground(Drawing::WHITE);
     }
+
+    virtual ~HelpPanel() { } //avoid inline error
 
     virtual void SaveDetails(ByteSink& sink) const
     {

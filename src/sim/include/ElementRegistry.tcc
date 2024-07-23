@@ -29,6 +29,12 @@ namespace MFM
   }
 
   template <class EC>
+  u32 ElementRegistry<EC>::GetLibraryPathsCount() const
+  {
+    return m_libraryPathsCount;
+  }
+
+  template <class EC>
   Element<EC> * ElementRegistry<EC>::GetRegisteredElement(u32 index)
   {
     if (index >= m_registeredElementsCount)
@@ -183,10 +189,16 @@ namespace MFM
       UlamElement<EC> * uelt = elt->AsUlamElement();
       if (uelt) {
         s32 eret = ucr.RegisterUlamElementEmpty(*uelt);
-        if (eret > 0)
+        if (eret > 0) {
           uelt->AllocateEmptyType();
-        if (eret < 0 || (eret == 0 && !ucr.RegisterUlamClass(*uelt)))
-          LOG.Warning("Ulam Class '%s' already registered", uelt->GetMangledClassName());
+          if (!ucr.RegisterUlamClass(*uelt)) {
+            LOG.Error("Failed to register ulam class Empty '%s'", uelt->GetMangledClassName());
+            FAIL(ILLEGAL_STATE);
+          }
+        } else {
+          if (eret < 0 || (eret == 0 && !ucr.RegisterUlamClass(*uelt)))
+            LOG.Warning("Ulam Class '%s' already registered", uelt->GetMangledClassName());
+        }
       }
     }
 

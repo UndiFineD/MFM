@@ -1,8 +1,15 @@
 #include "ByteSink.h"
 #include "ByteSource.h"
 #include "ByteSerializable.h"
+#include "OverflowableCharBufferByteSink.h"
 #include <string.h>   /* For strlen */
 #include <ctype.h>    /* For isprint */
+#include "Logger.h"
+
+#include <stdlib.h>   /* for free */
+#include <execinfo.h> /* for backtrace_symbols */
+#include <dlfcn.h>    /* for dladdr */
+#include <cxxabi.h>   /* for __cxa_demangle */
 
 namespace MFM {
 
@@ -16,6 +23,24 @@ namespace MFM {
     {
       if (!isprint(ch) || ch == '"' || ch == '%')
         Printf("%%%02x",ch);
+      else
+        WriteByte(ch);
+    }
+    WriteByte('"');
+  }
+
+  void ByteSink::PrintDoubleQuotedCStringWithLength(const char * nstring)
+  {
+    u8 len = nstring[-1];
+    WriteByte('"');
+    u8 ch;
+    for (u8 i = 0; i < len; ++i) 
+    {
+      ch = nstring[i];
+      if (ch == '\\')
+        Printf("\\\\");
+      else if (!isprint(ch) || ch == '"')
+        Printf("\\%03o",ch);
       else
         WriteByte(ch);
     }
@@ -462,6 +487,14 @@ XXX UPDATE
       }
       break;
 
+    case '<':  // Print the rest of a given &ByteSource
+      {
+        ByteSource * bs = va_arg(ap,ByteSource*);
+        if (!bs) Print("(null)");
+        else Copy(*bs);
+      }
+      break;
+
     case '@':
       {
         s32 argument = 0;
@@ -503,14 +536,18 @@ XXX UPDATE
       Print(va_arg(ap,u32),type, fieldWidth, padChar);
       break;
 
-    case 'f': 
-    {
-      FAIL(INCOMPLETE_CODE);
-      /*
-      double v =  va_arg(ap,double);
-      ByteSink::Print(face,v);
+    case 'f': {
+      double v = va_arg(ap,double);
+      OString32 fmt;
+      fmt.Print("%");
+      if (padChar != ' ') fmt.WriteByte(padChar);
+      if (fieldWidth > 0) fmt.Print(fieldWidth);
+      fmt.Print("f");
+      const u32 MAX_SIZE = 128;
+      char buf[MAX_SIZE];
+      snprintf(buf, MAX_SIZE, fmt.GetZString(), v);
+      Print(buf);
       break;
-      */
     }
 
     /* %Z: Print a null-terminated string INCLUDING a trailing NULL */
@@ -533,6 +570,13 @@ XXX UPDATE
       break;
     }
 
+    case 'S': {
+      const char * s = va_arg(ap,const char *);
+      if (!s) Print("(null)", fieldWidth, padChar);
+      else PrintDoubleQuotedCStringWithLength(s);
+      break;
+    }
+
     case 'p': {
       const void * p = va_arg(ap,void *);
       if (!p) Print("(nullp)");
@@ -552,4 +596,38 @@ XXX UPDATE
     }
     }
   }
+
+  void PrintBacktrace(FILE * f, void * const * backtraceArray, unsigned backtraceSize) {
+    OverflowableCharBufferByteSink<4096 + 2> bt;
+    DumpBacktrace(bt, backtraceArray, backtraceSize);
+    fprintf(f,"BACKTRACE %s",bt.GetZString());
+  }
+
+  void LogBacktrace(void * const * backtraceArray, unsigned backtraceSize) {
+    OverflowableCharBufferByteSink<4096 + 2> bt;
+    DumpBacktrace(bt, backtraceArray, backtraceSize);
+    LOG.Message("BACKTRACE %s",bt.GetZString());
+  }
+
+  void DumpBacktrace(ByteSink & bt, void * const * backtraceArray, unsigned backtraceSize)
+  {
+    char ** strings = backtrace_symbols (backtraceArray, backtraceSize);
+
+    for (u32 i = 0; i < backtraceSize; i++) {
+      Dl_info info;
+      if (dladdr(backtraceArray[i],&info)) {
+        char * demangled = NULL;
+        int status;
+        demangled = abi::__cxa_demangle(info.dli_sname, NULL, 0, &status);
+        bt.Printf(" -> %2d: %s + 0x%x\n",
+                  i,
+                  status == 0 ? demangled : info.dli_sname,
+                  (char*) backtraceArray[i] - (char*) info.dli_saddr);
+        free(demangled);
+      } else
+        bt.Printf(" -> %2d: %s\n", i, strings[i]);
+    }
+    free (strings);
+  }
+
 }

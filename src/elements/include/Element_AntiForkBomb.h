@@ -40,6 +40,11 @@ namespace MFM
   template <class EC>
   class Element_AntiForkBomb : public Element<EC>
   {
+  public:
+    virtual u32 GetTypeFromThisElement() const {
+      return 0xCE0b;
+    }
+    
     enum {  ANTIFORKBOMB_VERSION = 1 };
 
     // Extract short names for parameter types
@@ -86,7 +91,7 @@ namespace MFM
 
     enum { DEFAULT_COLOR = 0xff333333 };
 
-    virtual u32 GetAtomColor(const T& atom, u32 selector) const
+    virtual u32 GetAtomColor(const ElementTable<EC> & et, const UlamClassRegistry<EC> & ucr, const T& atom, u32 selector) const
     {
       u32 level = AFInflammationLevel::Read(atom);  // 0..3
       if (level == 0)

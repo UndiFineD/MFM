@@ -28,13 +28,31 @@ namespace MFM {
     return true;
   }
 
+  template <class EC>
+  bool EventWindow<EC>::TryEventAtForProfiling(const SPoint & tcenter)
+  {
+    if (!InitForEvent(tcenter))
+    {
+      return false;
+    }
+
+    ExecuteBehavior();
+
+    SetFree();
+    return true;
+  }
 
   template <class EC>
   bool EventWindow<EC>::TryEventAt(const SPoint & tcenter)
   {
-    MFM_LOG_DBG6(("EW::TryEventAt(%d,%d)",
-                  tcenter.GetX(),
-                  tcenter.GetY()));
+    Tile<EC> & t = GetTile();
+    MFM_API_ASSERT_STATE(!t.IsDummyTile()); //sanity
+
+    MFM_LOG_DBG6(("EW::TryEventAt(%d,%d) %s",
+		  tcenter.GetX(),
+                  tcenter.GetY(),
+		  t.GetLabel()));
+
     ++m_eventWindowsAttempted;
 
     if (RejectOnRecency(tcenter))
@@ -56,8 +74,11 @@ namespace MFM {
   template <class EC>
   void EventWindow<EC>::RecordEventAtTileCoord(const SPoint tcoord)
   {
-    ++m_eventWindowsExecuted;
     Tile<EC> & t = GetTile();
+    MFM_API_ASSERT_STATE(!t.IsDummyTile()); //sanity
+
+    ++m_eventWindowsExecuted;
+
     SPoint owned = Tile<EC>::TileCoordToOwned(tcoord);
     t.m_lastEventCenterOwned = owned;
     //t.GetSite(owned).SetLastEventEventNumber(m_eventWindowsExecuted);
@@ -68,6 +89,7 @@ namespace MFM {
   bool EventWindow<EC>::RejectOnRecency(const SPoint tcoord)
   {
     Tile<EC> & t = GetTile();
+    MFM_API_ASSERT_STATE(!t.IsDummyTile()); //sanity
     const u32 warpFactor = t.GetWarpFactor();
     SPoint owned = Tile<EC>::TileCoordToOwned(tcoord);
     u32 eventAge = t.GetUncachedEventAge32(owned);  // max age at one billion
@@ -77,7 +99,8 @@ namespace MFM {
   template <class EC>
   void EventWindow<EC>::ExecuteEvent()
   {
-    MFM_LOG_DBG6(("EW::ExecuteEvent"));
+
+    MFM_LOG_DBG6(("EW::ExecuteEvent %s", GetTile().GetLabel()));
     MFM_API_ASSERT_STATE(m_ewState == COMPUTE);
 
     ExecuteBehavior();
@@ -88,18 +111,18 @@ namespace MFM {
   template <class EC>
   void EventWindow<EC>::InitiateCommunications()
   {
-    MFM_LOG_DBG6(("EW::InitiateCommunications"));
+    MFM_LOG_DBG6(("EW::InitiateCommunications %s",GetTile().GetLabel()));
     MFM_API_ASSERT_STATE(m_ewState == COMPUTE);
 
     // Step 1: Write back the event window and set up the CacheProcessors
     StoreToTile();
 
     // Step 2: We are done!
-    m_ewState = FREE;
+    SetFree();
   }
 
   template <class EC>
-  void EventWindow<EC>::PrintEventSite(ByteSink & bs) 
+  void EventWindow<EC>::PrintEventSite(ByteSink & bs)
   {
     Tile<EC> & t = GetTile();
     SPointSerializer ssp(m_center);
@@ -109,8 +132,11 @@ namespace MFM {
   template <class EC>
   void EventWindow<EC>::ExecuteBehavior()
   {
-    MFM_LOG_DBG6(("EW::ExecuteBehavior"));
     Tile<EC> & t = GetTile();
+    MFM_API_ASSERT_STATE(!t.IsDummyTile()); //sanity
+
+    MFM_LOG_DBG6(("EW::ExecuteBehavior %s",t.GetLabel()));
+
     unwind_protect(
     {
       OString256 buff;
@@ -122,32 +148,32 @@ namespace MFM {
       const char * failMsg = MFMFailCodeReason(MFMThrownFailCode);
       if(!GetCenterAtomDirect().IsSane())
       {
-        LOG.Debug("%s FE(INSANE)",buff.GetZString());
+        MFM_LOG_DBG4(("%s FE(INSANE)",buff.GetZString()));
       }
       else if (failMsg)
       {
-        LOG.Message("%s behave() failed at %s:%d: %s (site type 0x%04x)",
-                    buff.GetZString(),
-                    failFile,
-                    lineno,
-                    failMsg,
-                    GetCenterAtomDirect().GetType());
+        MFM_LOG_DBG3(("%s behave() failed at %s:%d: %s (site type 0x%04x)",
+		      buff.GetZString(),
+		      failFile,
+		      lineno,
+		      failMsg,
+		      GetCenterAtomDirect().GetType()));
       }
       else
       {
-        LOG.Message("%s behave() failed at %s:%d: fail(%d/0x%08x) (site type 0x%04x)",
-                    buff.GetZString(),
-                    failFile,
-                    lineno,
-                    MFMThrownFailCode,
-                    MFMThrownFailCode,
-                    GetCenterAtomDirect().GetType());
+        MFM_LOG_DBG3(("%s behave() failed at %s:%d: fail(%d/0x%08x) (site type 0x%04x)",
+		      buff.GetZString(),
+		      failFile,
+		      lineno,
+		      MFMThrownFailCode,
+		      MFMThrownFailCode,
+		      GetCenterAtomDirect().GetType()));
       }
-
+      LogBacktrace(MFMThrownBacktraceArray, MFMThrownBacktraceSize);
       SetCenterAtomDirect(t.GetEmptyAtom());
     },
     {
-      MFM_LOG_DBG6(("ET::Execute"));
+      MFM_LOG_DBG6(("ET::Execute %s",t.GetLabel()));
       m_element->Behavior(*this);
     });
   }
@@ -158,6 +184,9 @@ namespace MFM {
     EventWindow & window = *this;
     Random & random = window.GetRandom();
     Tile<EC>& tile = window.GetTile();
+
+    MFM_API_ASSERT_STATE(!tile.IsDummyTile()); //sanity
+
     const MDist<R> & md = MDist<R>::get();
 
     SPoint sp;
@@ -186,7 +215,7 @@ namespace MFM {
   }
 
   template <class EC>
-  void EventWindow<EC>::SetBoundary(u32 boundary) 
+  void EventWindow<EC>::SetBoundary(u32 boundary)
   {
     if (boundary > R + 1) boundary = R + 1;
 
@@ -196,13 +225,16 @@ namespace MFM {
   }
 
   template <class EC>
-  bool EventWindow<EC>::InitForEvent(const SPoint & center)
+  bool EventWindow<EC>::InitForEvent(const SPoint & center, bool tryForLocks)
   {
-    MFM_LOG_DBG6(("EW::InitForEvent(%d,%d)",center.GetX(),center.GetY()));
+    Tile<EC> & tile = GetTile();
+    MFM_API_ASSERT_STATE(!tile.IsDummyTile()); //sanity
+
+    MFM_LOG_DBG6(("EW::InitForEvent(%d,%d) %s",
+		  center.GetX(),center.GetY(),
+		  tile.GetLabel()));
 
     MFM_API_ASSERT_STATE(IsFree());  // Don't be callin' when I'm not free
-
-    Tile<EC> & tile = GetTile();
 
     // We need to access the element early to determine its boundary
     T atom = *tile.GetAtom(center);
@@ -224,24 +256,26 @@ namespace MFM {
         tile.PlaceAtom(tile.GetEmptyAtom(), center);
       }
 
-      LOG.Debug("%s",buff.GetZString());
-      if (!fixed) 
+      MFM_LOG_DBG4(("%s",buff.GetZString()));
+      if (!fixed)
         return false;
     }
 
     u32 type = atom.GetType();
-    m_element  = tile.GetElementTable().Lookup(type);
+    m_element = tile.GetElementTable().Lookup(type);
     if (m_element == 0) // If no element of that type
     {
       tile.PlaceAtom(tile.GetEmptyAtom(), center);  // You must die
-      return false; 
+      return false;
     }
 
     SetBoundary(m_element->GetEventWindowBoundary());
 
-    if (!AcquireAllLocks(center, m_eventWindowBoundary))
+    if (tryForLocks && !AcquireAllLocks(center, m_eventWindowBoundary))
     {
-      MFM_LOG_DBG6(("EW::InitForEvent - abandoned"));
+      MFM_LOG_DBG6(("EW::InitForEvent (%d,%d) %s - abandoned",
+		    center.GetX(),center.GetY(),
+		    tile.GetLabel()));
       return false;
     }
 
@@ -255,84 +289,96 @@ namespace MFM {
   }
 
   template <class EC>
-  typename EventWindow<EC>::LockStatus EventWindow<EC>::AcquireDirLock(Dir dir)
+  typename EventWindow<EC>::LockStatus EventWindow<EC>::AcquireDirLock(Dir dir, const u32 neededLocks, const THREEDIR& lockRegions)
   {
-    CacheProcessor<EC> & cp = GetTile().GetCacheProcessor(dir);
+    Tile<EC> & ewtile = GetTile();
 
-    if (!cp.IsConnected())
+    MFM_API_ASSERT_STATE(!ewtile.IsDummyTile()); //sanity
+    MFM_API_ASSERT_ARG(Dirs::IsValidDir(dir, ewtile.IsTileGridLayoutStaggered())); //sanity
+
+    CacheProcessor<EC> & cp = ewtile.GetCacheProcessor(dir);
+
+    //if (!cp.IsConnected())
+    if (cp.IsUnclaimed() || !cp.IsConnected())
     {
       // Whups, didn't really need that one.  Leave it null, since
       // the other loops check all MAX_CACHES_TO_UPDATE slots anyway
-      MFM_LOG_DBG6(("EW::AcquireRegionLocks - skip: %s unconnected",
+      MFM_LOG_DBG6(("EW::AcquireRegionLocks %s - skip: %s unconnected",
+		    ewtile.GetLabel(),
                     Dirs::GetName(dir)));
       return LOCK_UNNEEDED;
     }
 
     if (!cp.IsIdle())
     {
-      MFM_LOG_DBG6(("EW::AcquireRegionLocks - fail: %s cp not idle",
+      MFM_API_ASSERT_STATE(!cp.IsUnclaimed()); //since it's connected
+      MFM_LOG_DBG6(("EW::AcquireRegionLocks %s - fail: %s cp not idle",
+		    ewtile.GetLabel(),
                     Dirs::GetName(dir)));
       return LOCK_UNAVAILABLE;
     }
 
-    bool locked = cp.TryLock(m_lockRegion);
+    bool locked = cp.TryLock(neededLocks, lockRegions);
     if (!locked)
     {
-      MFM_LOG_DBG6(("EW::AcquireRegionLocks - fail: didn't get %s lock",
+      MFM_LOG_DBG6(("EW::AcquireRegionLocks %s - fail: didn't get %s lock",
+		    ewtile.GetLabel(),
                     Dirs::GetName(dir)));
       return LOCK_UNAVAILABLE;
     }
-    MFM_LOG_DBG6(("EW::AcquireRegionLocks, %s locked",
-                  Dirs::GetName(dir)));
+    MFM_LOG_DBG6(("EW::AcquireRegionLocks %s, %s got lock"
+		  , ewtile.GetLabel()
+                  , Dirs::GetName(dir)));
     return LOCK_ACQUIRED;
   }
 
   template <class EC>
-  bool EventWindow<EC>::AcquireRegionLocks()
+  bool EventWindow<EC>::AcquireRegionLocks(const u32 neededArg, const THREEDIR& lockRegionsArg)
   {
+    Tile<EC> & tile = GetTile();
+
     Random & random = GetRandom();
 
-    MFM_LOG_DBG6(("EW::AcquireRegionLocks"));
+    MFM_LOG_DBG6(("EW::AcquireRegionLocks %s",tile.GetLabel()));
     // We cannot still have any cacheprocessors in use
     for (u32 i = 0; i < MAX_CACHES_TO_UPDATE; ++i)
-    { 
+    {
       MFM_API_ASSERT_STATE(m_cacheProcessorsLocked[i] == 0);
     }
 
-    if (((s32) m_lockRegion) == -1)
+    if (neededArg == 0)
     {
-      MFM_LOG_DBG6(("EW::AcquireRegionLocks - none needed"));
+      MFM_LOG_DBG6(("EW::AcquireRegionLocks %s - none needed",
+		    tile.GetLabel()));
       return true;  // Nobody is needed
     }
 
-    // At least one lock may be needed
+    // At least one lock may be needed, to be shuffled
+    u32 needed = neededArg;  //as flag
+    Dir lockDirs[MAX_LOCK_DIRS]; //to shuffle
+    for(u32 i = 0; i < needed; i++)
+      lockDirs[i] = lockRegionsArg[i];
 
-    Dir lockDirs[3];
-    u32 needed = 1;
-    Tile<EC> & tile = GetTile();
-    lockDirs[0] = m_lockRegion;
-
-    if (Dirs::IsCorner(m_lockRegion))
-    {
-      lockDirs[1] = Dirs::CCWDir(m_lockRegion);
-      lockDirs[2] = Dirs::CWDir(m_lockRegion);
-      needed = 3;
+    if(needed==3)
       Shuffle<Dir,3>(GetRandom(),lockDirs);
-    }
+    else if (needed==2)
+      Shuffle<Dir,2>(GetRandom(),lockDirs);
 
-    MFM_LOG_DBG6(("EW::AcquireRegionLocks - checking %d", needed));
+    MFM_LOG_DBG6(("EW::AcquireRegionLocks %s - checking %d",
+		  tile.GetLabel(),
+		  needed));
 
     u32 got = 0;
     for (s32 i = needed; --i >= 0; )
     {
       Dir dir = lockDirs[i];
-      LockStatus ls = AcquireDirLock(dir);
+      LockStatus ls = AcquireDirLock(dir, neededArg, lockRegionsArg);
 
       if (ls == LOCK_UNNEEDED)
       {
         // Whups, didn't really need that one.  Leave it null, since
         // the other loops check all MAX_CACHES_TO_UPDATE slots anyway
-        --needed;
+        --needed;// NO LONGER CORRESPONDS TO THE ARRAY ITEMS!!!
         continue;
       }
 
@@ -348,48 +394,90 @@ namespace MFM {
       ++got;
     }
 
-    if (got < needed)
-    {
-      MFM_LOG_DBG6(("EW::AcquireRegionLocks - got %d but needed %d", got, needed));
-      // Opps, didn't get all, free any we got
-
-      for (m_cpli.ShuffleOrReset(random); m_cpli.HasNext(); )
+    if(needed == 0)
       {
-        u32 i = m_cpli.Next();
-
-        if (m_cacheProcessorsLocked[i])
-        {
-          CacheProcessor<EC> & cp = *m_cacheProcessorsLocked[i];
-          cp.Unlock();
-          MFM_LOG_DBG6(("EW::AcquireRegionLocks #%d freed", i));
-          m_cacheProcessorsLocked[i] = 0;
-        }
+        MFM_LOG_DBG6(("EW::AcquireRegionLocks %s NONE needed",
+		      tile.GetLabel()));
+	return true;
       }
 
-      return false;
-    }
+    if (got < needed)
+    {
+      MFM_LOG_DBG6(("EW::AcquireRegionLocks %s - got %d but needed %d",
+		    tile.GetLabel(), got, needed));
+      // Opps, didn't get all, free any we got
 
-    // Activate everything we got
+      if(got > 0)
+	{
+	  for (m_cpli.ShuffleOrReset(random); m_cpli.HasNext(); )
+	    {
+	      u32 i = m_cpli.Next();
+
+	      if (m_cacheProcessorsLocked[i])
+		{
+		  CacheProcessor<EC> & cp = *m_cacheProcessorsLocked[i];
+		  cp.Unlock();
+		  MFM_LOG_DBG6(("EW::AcquireRegionLocks %s [%s] #%d freed",
+				tile.GetLabel(),
+				Dirs::GetName(cp.GetCacheDir()), i));
+		  m_cacheProcessorsLocked[i] = 0;
+		}
+	    }
+	} //else no locks to unlock
+
+      return false;
+    } //failed to get all needed locks, so none.
+
+    // Only got 1, so do it..
+    if(got == 1)
+      {
+	MFM_API_ASSERT_STATE(m_cacheProcessorsLocked[0]);
+	CacheProcessor<EC> & cp = *m_cacheProcessorsLocked[0];
+        MFM_LOG_DBG6(("EW::AcquireRegionLocks %s activate ONE #0 [%s]",
+		      tile.GetLabel(),
+		      Dirs::GetName(cp.GetCacheDir())));
+	cp.Activate();
+
+	return true;
+      }
+
+    // Activate everything we got, randomly
     for (m_cpli.ShuffleOrReset(random); m_cpli.HasNext(); )
     {
       u32 i = m_cpli.Next();
-
       if (m_cacheProcessorsLocked[i])
       {
-        MFM_LOG_DBG6(("EW::AcquireRegionLocks activate #%d", i));
-        m_cacheProcessorsLocked[i]->Activate();
+	CacheProcessor<EC> & cp = *m_cacheProcessorsLocked[i];
+
+	MFM_LOG_DBG6(("EW::AcquireRegionLocks %s activate #%d",
+		      tile.GetLabel(), i,
+		      Dirs::GetName(cp.GetCacheDir())));
+	cp.Activate();
       }
     }
 
     return true;
-  }
+  } //AcquireRegionLocks
 
   template <class EC>
   bool EventWindow<EC>::AcquireAllLocks(const SPoint& tileCenter, const u32 eventWindowBoundary)
   {
     Tile<EC> & t = GetTile();
-    m_lockRegion = t.GetLockDirection(tileCenter, eventWindowBoundary);
-    return AcquireRegionLocks();
+    MFM_API_ASSERT_STATE(!t.IsDummyTile()); //sanity
+    THREEDIR eventLockRegions;
+    //try starting with only connected directions
+    //u32 eventLocksNeeded = t.GetLockDirections(tileCenter, eventWindowBoundary, eventLockRegions);
+    u32 eventLocksNeeded = t.GetAllLockDirections(tileCenter, eventWindowBoundary, eventLockRegions);
+
+    MFM_LOG_DBG7(("EW:: AcquireAllLocks %s %d[%s %s %s] for tilecenter(%2d,%2d)",
+                  t.GetLabel(),
+		  eventLocksNeeded,
+		  Dirs::GetName(eventLockRegions[0]),
+		  eventLocksNeeded > 1? Dirs::GetName(eventLockRegions[1]) : "-",
+		  eventLocksNeeded > 2? Dirs::GetName(eventLockRegions[2]) : "-",
+		  tileCenter.GetX(), tileCenter.GetY()));
+
+    return AcquireRegionLocks(eventLocksNeeded, eventLockRegions);
   }
 
   template <class EC>
@@ -402,21 +490,14 @@ namespace MFM {
     , m_eventWindowsExecuted(0)
     , m_eventWindowSitesAccessed(0)
     , m_center(0,0)
-    , m_lockRegion(-1)
     , m_sym(PSYM_NORMAL)
     , m_ewState(FREE)
   {
     m_cpli.Shuffle(GetRandom());
 
-    for (u32 i = 0; i < SITE_COUNT; ++i)
-    {
-      m_isLiveSite[i] = false;
-    }
+    for (u32 i = 0; i < SITE_COUNT; m_isLiveSite[i++] = false);
 
-    for (u32 i = 0; i < MAX_CACHES_TO_UPDATE; ++i)
-    {
-      m_cacheProcessorsLocked[i] = 0;
-    }
+    for (u32 i = 0; i < MAX_CACHES_TO_UPDATE; m_cacheProcessorsLocked[i++] = 0);
 
   }
 
@@ -428,9 +509,9 @@ namespace MFM {
   }
 
   template <class EC>
-  u32 EventWindow<EC>::MapToIndexSymValid(const SPoint & loc) const
+  u32 EventWindow<EC>::MapToIndexSymValid(const SPoint & loc, PointSymmetry sym) const
   {
-    return MapToIndexDirectValid(SymMap(loc, m_sym, SPoint(2*R, 2*R)));
+    return MapToIndexDirectValid(SymMap(loc, sym, SPoint(2*R, 2*R)));
   }
 
   template <class EC>
@@ -452,7 +533,8 @@ namespace MFM {
     for (u32 i = 0; i < m_boundedSiteCount; ++i)
     {
       const SPoint & pt = md.GetPoint(i) + m_center;
-      m_atomBuffer[i] = tile.GetAtomForEventWindow(pt);
+      //m_atomBuffer[i] = tile.GetAtomForEventWindow(pt);
+      m_atomBuffer[i].WriteAtom(tile.GetAtomForEventWindow(pt));
       m_isLiveSite[i] = tile.IsLiveSite(pt);
     }
   }
@@ -460,11 +542,15 @@ namespace MFM {
   template <class EC>
   void EventWindow<EC>::StoreToTile()
   {
+    // Now write back changes and notify the cps
+    Tile<EC> & tile = GetTile();
+    MFM_API_ASSERT_STATE(!tile.IsDummyTile()); //sanity
+
     const MDist<R> & md = MDist<R>::get();
 
     Random & random = GetRandom();
 
-    MFM_LOG_DBG6(("EW::StoreToTile"));
+    MFM_LOG_DBG6(("EW::StoreToTile %s",tile.GetLabel()));
 
     // First initialize the cache processors
     for (m_cpli.ShuffleOrReset(random); m_cpli.HasNext(); )
@@ -476,9 +562,6 @@ namespace MFM {
         m_cacheProcessorsLocked[i]->StartLoading(m_center);
       }
     }
-
-    // Now write back changes and notify the cps
-    Tile<EC> & tile = GetTile();
 
     // Record the event in the tile history
     EventHistoryBuffer<EC> & ehb = tile.GetEventHistoryBuffer();
@@ -493,9 +576,10 @@ namespace MFM {
       bool dirty = false;
       if (m_isLiveSite[i])
       {
-        if (m_atomBuffer[i] != *tile.GetAtom(pt))
+        //if (m_atomBuffer[i] != *tile.GetAtom(pt))
+	if (m_atomBuffer[i].GetAtom() != *tile.GetAtom(pt))
         {
-          tile.PlaceAtom(m_atomBuffer[i], pt);
+          tile.PlaceAtom(m_atomBuffer[i].GetAtom(), pt);
           dirty = true;
         }
 
@@ -510,7 +594,7 @@ namespace MFM {
       }
     }
 
-    MFM_LOG_DBG6(("EW::StoreToTile releasing"));
+    MFM_LOG_DBG6(("EW::StoreToTile releasing %s",tile.GetLabel()));
     // Finally, release the cache processors to take it from here
     for (m_cpli.ShuffleOrReset(random); m_cpli.HasNext(); )
     {
@@ -531,7 +615,8 @@ namespace MFM {
 
     if (m_isLiveSite[idx])
     {
-      m_atomBuffer[idx] = atom;
+      //m_atomBuffer[idx] = atom;
+      m_atomBuffer[idx].WriteAtom(atom); //a copy
       return true;
     }
     return false;
@@ -544,7 +629,8 @@ namespace MFM {
 
     if (m_isLiveSite[idx])
     {
-      m_atomBuffer[idx] = atom;
+      //m_atomBuffer[idx] = atom;
+      m_atomBuffer[idx].WriteAtom(atom);
       return true;
     }
     return false;
@@ -555,21 +641,23 @@ namespace MFM {
   {
     u32 idx = MapToIndexSymValid(offset);
     MFM_API_ASSERT_ARG(idx < m_boundedSiteCount);
-    return m_atomBuffer[idx];
+    //return m_atomBuffer[idx];
+    return m_atomBuffer[idx].GetAtom();
   }
 
   template <class EC>
   const typename EC::ATOM_CONFIG::ATOM_TYPE& EventWindow<EC>::GetRelativeAtomDirect(const SPoint& offset) const
   {
     u32 idx = MapToIndexDirectValid(offset);
-    return m_atomBuffer[idx];
+    //return m_atomBuffer[idx];
+    return m_atomBuffer[idx].GetAtom();
   }
 
   template <class EC>
   const typename EC::ATOM_CONFIG::ATOM_TYPE& EventWindow<EC>::GetRelativeAtomSym(const Dir mooreOffset) const
   {
     SPoint pt;
-    Dirs::FillDir(pt, mooreOffset);
+    Dirs::FillDir(pt, mooreOffset, false);
     return GetRelativeAtomSym(pt);
   }
 
@@ -577,7 +665,7 @@ namespace MFM {
   const typename EC::ATOM_CONFIG::ATOM_TYPE& EventWindow<EC>::GetRelativeAtomDirect(const Dir mooreOffset) const
   {
     SPoint pt;
-    Dirs::FillDir(pt, mooreOffset);
+    Dirs::FillDir(pt, mooreOffset, false); //?
     return GetRelativeAtomDirect(pt);
   }
 
@@ -595,9 +683,11 @@ namespace MFM {
     MFM_API_ASSERT_ARG(idxa < m_boundedSiteCount);
     MFM_API_ASSERT_ARG(idxb < m_boundedSiteCount);
 
-    T tmp = m_atomBuffer[idxa];
-    m_atomBuffer[idxa] = m_atomBuffer[idxb];
-    m_atomBuffer[idxb] = tmp;
+    T tmp = m_atomBuffer[idxa].GetAtom();
+    //m_atomBuffer[idxa] = m_atomBuffer[idxb];
+    //m_atomBuffer[idxb] = tmp;
+    m_atomBuffer[idxa].WriteAtom(m_atomBuffer[idxb].GetAtom());
+    m_atomBuffer[idxb].WriteAtom(tmp);
   }
 
   template <class EC>
@@ -615,5 +705,17 @@ namespace MFM {
     u32 idxb = MapToIndexDirectValid(locB);
     SwapAtomsDirect(idxa, idxb);
   }
+
+  template <class EC>
+  s32 EventWindow<EC>::GetSiteNumIfAnyDirect(const BitStorage<EC> & atom) const
+  {
+    const BitStorage<EC> * at = &atom;
+    const AtomBitStorage<EC> * first = &m_atomBuffer[0];
+    const AtomBitStorage<EC> * last = &m_atomBuffer[m_boundedSiteCount-1];
+    if (at < first || at > last) return -1;
+    u32 absIdx = ((u32) (((char*) at) - ((char*) first))) / sizeof(*first);
+    return (s32) absIdx;
+  }
+
 
 } /* namespace MFM */

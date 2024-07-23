@@ -44,6 +44,7 @@ namespace MFM
   template <class EC> class EventWindow; // FORWARD
   template <class EC> class ElementTable; // FORWARD
   template <class EC> class UlamElement; // FORWARD
+  template <class EC> class UlamClassRegistry; // FORWARD
 
   /**
    * A standard basis for specifying degrees of diffusability.
@@ -141,7 +142,7 @@ namespace MFM
      *
      * @returns The smallest event window radius this Element will
      * never access.  Return values larger than R + 1 are treated as R
-     * + 1.  
+     * + 1.
      */
     virtual u32 GetEventWindowBoundary() const
     {
@@ -275,6 +276,8 @@ namespace MFM
     }
 
     /**
+     * DEPRECATED: Use just AllocateType() instead.
+     *
      * Assigns the type of this Element using the supplied
      * ElementTypeNumberMap . This type is only assigned if it has not
      * been assigned already. Once this type has been allocated, the
@@ -286,8 +289,27 @@ namespace MFM
     {
       if (!m_hasType)
       {
-        m_type = etnm.AllocateType(m_UUID);
+        //m_type = etnm.AllocateType(m_UUID);
         m_hasType = true;
+	m_type = this->GetTypeFromThisElement(); //ulam-4 ElementTypeNumberMap defunct
+        m_defaultAtom = BuildDefaultAtom();
+      }
+    }
+
+    /**
+     * Assigns the type of this Element using the ulam-supplied type
+     * info.  This type is only assigned if it has not been assigned
+     * already. Once this type has been allocated, the default Atom of
+     * this Element is constructed and an Atom of this Element may be
+     * placed.
+     *
+     */
+    void AllocateType()
+    {
+      if (!m_hasType)
+      {
+        m_hasType = true;
+	m_type = this->GetTypeFromThisElement(); //ulam-4 ElementTypeNumberMap defunct
         m_defaultAtom = BuildDefaultAtom();
       }
     }
@@ -318,6 +340,11 @@ namespace MFM
     {
       MFM_API_ASSERT_STATE(m_hasType);
       return m_type;
+    }
+
+    virtual u32 GetTypeFromThisElement() const
+    {
+      FAIL(UNSUPPORTED_OPERATION);
     }
 
     void MakeAlternateNameForTestingInternal(const Element & asThis)
@@ -501,7 +528,7 @@ namespace MFM
      *
      * @returns The 32-bit ARGB color of which to render \c atom with.
      */
-    virtual u32 GetAtomColor(const ElementTable<EC> & et, const T& atom, u32 selector) const
+    virtual u32 GetAtomColor(const ElementTable<EC> & et, const UlamClassRegistry<EC> & ucr, const T& atom, u32 selector) const
     {
       return GetElementColor();
     }
@@ -512,9 +539,9 @@ namespace MFM
      * modified by user-requested lowlighting etc.
      *
      */
-    u32 GetDynamicColor(const ElementTable<EC> & et, const T& atom, u32 selector) const
+    u32 GetDynamicColor(const ElementTable<EC> & et, const UlamClassRegistry<EC> & ucr, const T& atom, u32 selector) const
     {
-      u32 baseColor = this->GetAtomColor(et, atom, selector);
+      u32 baseColor = this->GetAtomColor(et, ucr, atom, selector);
 
       if(m_renderLowlight)
       {

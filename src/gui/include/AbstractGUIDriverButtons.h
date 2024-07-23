@@ -293,6 +293,35 @@ namespace MFM
   };
 
   template<class GC>
+  struct GridRunCheckbox2 : public AbstractGridCheckbox<GC>
+  {
+    GridRunCheckbox2()
+      : AbstractGridCheckbox<GC>("Run2")
+    {
+      AbstractButton::SetName("GridRunButton2");
+      Panel::SetDoc("Run/pause the grid (alternate)");
+      Panel::SetFont(FONT_ASSET_BUTTON_BIG);
+    }
+    virtual s32 GetSection() { return HELP_SECTION_RUNNING; }
+    virtual bool GetKeyboardAccelerator(u32 & keysym, u32 & mod)
+    {
+      keysym = SDLK_TAB;
+      mod = 0;
+      return true;
+    }
+
+    virtual bool IsChecked() const
+    {
+      return !this->GetDriver().IsKeyboardPaused();
+    }
+    virtual void SetChecked(bool checked)
+    {
+      this->GetDriver().SetKeyboardPaused(!checked);
+    }
+
+  };
+
+  template<class GC>
   struct GridRenderButton : public AbstractGridCheckbox<GC>
   {
     GridRenderButton()
@@ -922,6 +951,66 @@ namespace MFM
    virtual void SetChecked(bool value)
     {
       this->GetDriver().SetInfoBoxVisible(value);
+    }
+
+  };
+
+  template<class GC>
+  struct SuppressLabelsButton : public AbstractGridCheckbox<GC>
+  {
+    SuppressLabelsButton()
+      : AbstractGridCheckbox<GC>("No labels")
+    {
+      AbstractButton::SetName("SuppressLabelsButton");
+      Panel::SetDoc("Toggle suppressing labels on atoms");
+      Panel::SetFont(FONT_ASSET_BUTTON_BIG);
+    }
+    virtual s32 GetSection() { return HELP_SECTION_DISPLAY; }
+    virtual bool GetKeyboardAccelerator(u32 & keysym, u32 & mod)
+    {
+      keysym = SDLK_l;
+      mod = KMOD_SHIFT;
+      return true;
+    }
+
+    virtual bool IsChecked() const
+    {
+      return  this->GetTileRenderer().IsSuppressLabels();
+    }
+
+   virtual void SetChecked(bool value)
+    {
+      this->GetTileRenderer().SetSuppressLabels(value);
+    }
+
+  };
+
+  template<class GC>
+  struct DrawCustomButton : public AbstractGridCheckbox<GC>
+  {
+    DrawCustomButton()
+      : AbstractGridCheckbox<GC>("Custom graphics")
+    {
+      AbstractButton::SetName("DrawCustomButton");
+      Panel::SetDoc("Toggle rendering atom-specific custom graphics");
+      Panel::SetFont(FONT_ASSET_BUTTON_BIG);
+    }
+    virtual s32 GetSection() { return HELP_SECTION_DISPLAY; }
+    virtual bool GetKeyboardAccelerator(u32 & keysym, u32 & mod)
+    {
+      keysym = SDLK_g;
+      mod = KMOD_SHIFT;
+      return true;
+    }
+
+    virtual bool IsChecked() const
+    {
+      return  this->GetTileRenderer().IsDrawCustom();
+    }
+
+   virtual void SetChecked(bool value)
+    {
+      this->GetTileRenderer().SetDrawCustom(value);
     }
 
   };

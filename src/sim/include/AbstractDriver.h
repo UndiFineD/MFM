@@ -1,6 +1,7 @@
 /*                                              -*- mode:C++ -*-
   AbstractDriver.h Base class for all MFM drivers
-  Copyright (C) 2014 The Regents of the University of New Mexico.  All rights reserved.
+  Copyright (C) 2014,2017 The Regents of the University of New Mexico.  All rights reserved.
+  Copyright (C) 2017 Ackleyshack,LLC.  All rights reserved.
 
   This library is free software; you can redistribute it and/or
   modify it under the terms of the GNU Lesser General Public
@@ -22,7 +23,8 @@
   \file AbstractDriver.h Base class for all MFM drivers
   \author Trent R. Small.
   \author David H. Ackley.
-  \date (C) 2014 All rights reserved.
+  \author Elena S. Ackley.
+  \date (C) 2014,2017 All rights reserved.
   \lgpl
  */
 #ifndef ABSTRACTDRIVER_H
@@ -45,7 +47,7 @@
 #include "Grid.h"
 #include "ElementTable.h"
 #include "VArguments.h"
-#include "StdElements.h"
+/* #include "StdElements.h" XXX NO LONGER USING? */
 #include "ElementRegistry.h"
 #include "Version.h"
 #include "DebugTools.h"
@@ -61,6 +63,22 @@
 
 namespace MFM
 {
+  /** 
+   * A non-template base for the abstract drivers gah.
+   */
+  struct AbstractDriverBase {
+    bool RequestSnapshot(const char * cpath) {
+      ZStringByteSource zbs(cpath);
+      return RequestSnapshot(zbs);
+    }
+
+    virtual bool RequestSnapshot(ByteSource & path) {
+      return false;
+    }
+
+    virtual ~AbstractDriverBase() { }
+  };
+
   /**
    * An abstract driver from which all MFM drivers should
    * inherit. This should be the highest level structure and contain
@@ -94,11 +112,13 @@ namespace MFM
      */
     typedef ElementRegistry<EC> OurElementRegistry;
 
+#if 0
     /**
      * Template shortcut for an instance of StdElements with the
      * correct template parameters.
      */
     typedef StdElements<EC> OurStdElements;
+#endif
 
     /**
      * Template shortcut for a Grid with the correct template
@@ -127,6 +147,11 @@ namespace MFM
      * The height of the Grid used by this simulation.
      */
     const u32 GRID_HEIGHT;
+
+    /**
+     * The grid layout used by this simulation
+     */
+    const GridLayoutPattern GRID_LAYOUT;
 
     void NeedElement(Element<EC>* element)
     {
@@ -217,6 +242,8 @@ namespace MFM
       WriteTimeBasedData(fbs, exists);
       fclose(fp);
     }
+
+    void XXXCHECKCACHES() { m_grid.CheckCaches(); }
 
     /**
      * Runs the held Grid and all its associated threads for a brief
@@ -428,6 +455,7 @@ namespace MFM
         }
       }
 
+#if 0 // DEAD: --ue-demos deprecated
       if (this->m_includeUEDemos)
       {
         const char * LIBUEDEMOS_PATH = "elements/libuedemos.so";
@@ -441,7 +469,8 @@ namespace MFM
           m_elementRegistry.AddLibraryPath(buffer.GetZString());
         }
       }
-
+#endif
+      
       const char* (subs[]) =
       {
         "", "vid", "eps", "tbd", "teps", "save", "screenshot", "autosave", "log"
@@ -487,10 +516,17 @@ namespace MFM
       double full = m_grid.GetFullSitePercentage();
       if((m_haltAfterAEPS > 0 && m_AEPS > m_haltAfterAEPS)
          || (m_haltOnEmpty && full == 0.0)
-         || (m_haltOnFull && full == 1.0))
+         || (m_haltOnFull && full == 1.0)
+         || (m_AEPS > 0 && m_haltOnExtinctionOf &&
+             m_grid.GetAtomCountFromSymbol(GetHaltAfterExinctionOfSymbol())==0)
+         )
       {
         // Free final save if halting on --halt*.  Hope for good-looking corpse.
-        SaveGridWithConstantFilename("save/final.mfs");
+        {
+          const char* filename =
+            GetSimDirPathTemporary("save/final-%D-%D.mfs", m_epochCount, (u32) m_AEPS);
+          SaveGrid(filename);
+        }
         WriteTimeBasedData();
         m_grid.ShutdownTileThreads();
         return false;
@@ -507,6 +543,8 @@ namespace MFM
 
     void SetAEPSPerEpoch(u32 aeps)
     {
+      if (m_maxEpochLength > 0 && aeps > m_maxEpochLength)
+        aeps =  m_maxEpochLength;
       m_AEPSPerEpoch = aeps;
     }
 
@@ -554,7 +592,7 @@ namespace MFM
       VArguments& args = driver.m_varguments;
 
       bool wantList = (strcmp("list", demo) == 0);
-      bool wantAll = (strcmp("all", demo) == 0);
+      bool wantAll = false;
 
       // Look for demos-list file
       OString512 buf;
@@ -579,7 +617,7 @@ namespace MFM
           OString64 name;
           OString256 mfz, libue, classes, info;
 
-          lastMatches = 
+          lastMatches =
             fs.Scanf("%Z%Z%Z%Z%Z\n", &name, &mfz, &libue, &classes, &info);
 
           if (lastMatches != 6)
@@ -591,31 +629,37 @@ namespace MFM
             printf("\nDEMO: %s\n", zname);
             printf(" To run the demo standalone: mfzrun %s demo\n", zname);
             printf(" To load the demo's classes: mfms --demo %s\n", zname);
-            printf("   includes classes: %s\n", 
+            printf("   includes classes: %s\n",
                    classes.GetZString());
             ++count;
           }
           else if (wantAll || !strcmp(demo,name.GetZString()))
           {
-            printf("Including %s from %s\n", 
+            printf("Including %s from %s\n",
                    classes.GetZString(),
                    name.GetZString());
 
             // fake up an appropriate -ep call
-            RegisterElementLibraryPath(libue.GetZString(), driverptr);
-            ++count;
+            {
+              OString512 resfile;
+              if (!Utils::GetReadableResourceFile(libue.GetZString(), resfile))
+                args.Die("Internal inconsistency: Can't find '%s'",resfile.GetZString());
+                      
+              RegisterElementLibraryPath(resfile.GetZString(), driverptr);
+              ++count;
+            }
           }
 
         }
 
         fs.Close();
 
-        if (lastMatches != 0) 
+        if (lastMatches != 0)
         {
           LOG.Warning("Incomplete or corrupt %s", buf.GetZString());
         }
 
-        if ((wantList || wantAll) && count == 0) 
+        if ((wantList || wantAll) && count == 0)
           args.Die("No demos found");
 
         if (wantList)
@@ -747,6 +791,21 @@ namespace MFM
       }
     }
 
+    static void SetMaxEpochLengthFromArgs(const char* aeps, void* driverptr)
+    {
+      AbstractDriver& driver = *(AbstractDriver*)driverptr;
+      VArguments& args = driver.m_varguments;
+
+      s32 out;
+      const char * errmsg = AbstractDriver<GC>::GetNumberFromString(aeps, out, 0, S32_MAX);
+      if (errmsg)
+      {
+        args.Die("Bad max epoch length '%s': %s", aeps, errmsg);
+      }
+
+      driver.m_maxEpochLength = out;
+    }
+
     static void SetHaltOnEmpty(const char* not_needed, void* driver)
     {
       ((AbstractDriver*)driver)->m_haltOnEmpty = 1;
@@ -759,17 +818,27 @@ namespace MFM
 
     static void SetNoStdFromArgs(const char* not_needed, void* driver)
     {
+      LOG.Message("--no-std is now the only option, so does not need to appear on the command line");
       ((AbstractDriver*)driver)->m_suppressStdElements = 1;
     }
 
-    static void SetUEDemosFromArgs(const char* not_needed, void* driver)
+    static void SetUEDemosFromArgs(const char* not_needed, void* driverptr)
     {
-      ((AbstractDriver*)driver)->m_includeUEDemos = 1;
+      AbstractDriver& driver = *((AbstractDriver*)driverptr);
+      VArguments& args = driver.m_varguments;
+
+      args.Die("No longer supported: '--ue-demos'");
+
+      // ((AbstractDriver*)driver)->m_includeUEDemos = 1;
     }
 
-    static void SetCppDemosFromArgs(const char* not_needed, void* driver)
+    static void SetCppDemosFromArgs(const char* not_needed, void* driverptr)
     {
-      ((AbstractDriver*)driver)->m_includeCPPDemos = 1;
+      AbstractDriver& driver = *((AbstractDriver*)driverptr);
+      //VArguments& args = driver.m_varguments;
+
+      //args.Die("No longer supported: '--cpp-demos'");
+      driver.m_includeCPPDemos = 1;
     }
 
     static void SetGridImages(const char* not_needed, void* driver)
@@ -862,6 +931,37 @@ namespace MFM
       driver.m_haltAfterAEPS = (u32) out;
     }
 
+    static void SetEdenSeedFromArgs(const char* symbol, void* driverptr)
+    {
+      AbstractDriver& driver = *((AbstractDriver*)driverptr);
+      VArguments& args = driver.m_varguments;
+
+      if (strlen(symbol) > 2)
+        args.Die("Bad atomic symbol '%s'", symbol);
+
+      if (driver.m_createEdenSeed)
+        args.Die("--edenseed can only be specified once");
+      
+      driver.m_edenSeedSymbol[0] = symbol[0];
+      driver.m_edenSeedSymbol[1] = symbol[1];
+      driver.m_edenSeedSymbol[2] = symbol[2];
+      driver.m_createEdenSeed = true;
+    }
+
+    static void SetHaltOnExtinctionOfFromArgs(const char* symbol, void* driverptr)
+    {
+      AbstractDriver& driver = *((AbstractDriver*)driverptr);
+      VArguments& args = driver.m_varguments;
+
+      if (strlen(symbol) > 2)
+        args.Die("Bad atomic symbol '%s'", symbol);
+
+      driver.m_extinctionSymbol[0] = symbol[0];
+      driver.m_extinctionSymbol[1] = symbol[1];
+      driver.m_extinctionSymbol[2] = symbol[2];
+      driver.m_haltOnExtinctionOf = true;
+    }
+
     static void SetWarpFactorFromArgs(const char* wfs, void* driverptr)
     {
       AbstractDriver& driver = *((AbstractDriver*)driverptr);
@@ -949,6 +1049,7 @@ namespace MFM
       sink.Print(m_accelerateAfterEpochs, Format::LXX32);
       sink.Print(m_acceleration, Format::LXX32);
       sink.Print(m_surgeAfterEpochs, Format::LXX32);
+      sink.Print(m_maxEpochLength, Format::LXX32);
       sink.Printf(",");
 
       sink.Print(m_gridImages, Format::LXX32);
@@ -988,12 +1089,14 @@ namespace MFM
       u32 tmp_m_accelerateAfterEpochs;
       u32 tmp_m_acceleration;
       u32 tmp_m_surgeAfterEpochs;
+      u32 tmp_m_maxEpochLength;
 
       if (!source.Scan(tmp_m_AEPSPerEpoch, Format::LXX32)) return false;
       if (!source.Scan(tmp_m_autosavePerEpochs, Format::LXX32)) return false;
       if (!source.Scan(tmp_m_accelerateAfterEpochs, Format::LXX32)) return false;
       if (!source.Scan(tmp_m_acceleration, Format::LXX32)) return false;
       if (!source.Scan(tmp_m_surgeAfterEpochs, Format::LXX32)) return false;
+      if (!source.Scan(tmp_m_maxEpochLength, Format::LXX32)) return false;
       if (1 != source.Scanf(",")) return false;
 
       u32 tmp_m_gridImages;
@@ -1035,6 +1138,7 @@ namespace MFM
       m_accelerateAfterEpochs = tmp_m_accelerateAfterEpochs;
       m_acceleration = tmp_m_acceleration;
       m_surgeAfterEpochs = tmp_m_surgeAfterEpochs;
+      m_maxEpochLength = tmp_m_maxEpochLength;
 
       m_gridImages = tmp_m_gridImages;
       m_tileImages = tmp_m_tileImages;
@@ -1105,7 +1209,7 @@ namespace MFM
       if (path[0] == '/' || !Utils::GetReadableResourceFile(path, buf))
       {
         buf.Printf("%s",path); // absolute path or not resource relative
-      } 
+      }
       /* else buf filled with resource path */
 
       LOG.Message("Loading configuration '%s'", buf.GetZString());
@@ -1171,22 +1275,23 @@ namespace MFM
       {
         ++m_acceleration;
       }
-
-
     }
 
-    AbstractDriver(u32 gridWidth, u32 gridHeight)
+    AbstractDriver(u32 gridWidth, u32 gridHeight, GridLayoutPattern gridLayout)
       : GRID_WIDTH(gridWidth)
       , GRID_HEIGHT(gridHeight)
+      , GRID_LAYOUT(gridLayout)
       , m_neededElementCount(0)
-      , m_grid(m_elementRegistry, GRID_WIDTH, GRID_HEIGHT)
+      , m_grid(m_elementRegistry, GRID_WIDTH, GRID_HEIGHT, GRID_LAYOUT)
       , m_ticksLastStopped(0)
       , m_totalPriorTicks(0)
       , m_currentTickBasis(0)
       , m_haltAfterAEPS(0)
+      , m_haltOnExtinctionOf(false) // if true, m_extinctionSymbol has (unvalidated) content
+      , m_createEdenSeed(false) // if true, m_edenSeedSymbol has (unvalidated) content
       , m_haltOnEmpty(false)
       , m_haltOnFull(false)
-      , m_suppressStdElements(false)
+      , m_suppressStdElements(true)
       , m_includeUEDemos(false)
       , m_includeCPPDemos(false)
       , m_msSpentRunning(0)
@@ -1200,6 +1305,7 @@ namespace MFM
       , m_accelerateAfterEpochs(0)
       , m_acceleration(1)
       , m_surgeAfterEpochs(0)
+      , m_maxEpochLength(0)
       , m_gridImages(false)
       , m_tileImages(false)
       , m_AEPS(0.0)
@@ -1217,6 +1323,8 @@ namespace MFM
     {
       InitTicks(0); // Overwritten later on -cp load
     }
+
+    virtual ~AbstractDriver() {} //avoid inline error
 
     virtual void RegisterExternalConfigSections()
     {
@@ -1306,7 +1414,7 @@ namespace MFM
       RegisterArgument("Display this help message, then exit.",
                        "-h|--help", &PrintArgUsage, (void*)(&m_varguments), false);
 
-      RegisterArgument("Show built-in demos (--demo list), or load one (--demo NAME) or all (--demo all)",
+      RegisterArgument("Show built-in demos (--demo list), or load one (--demo NAME)",
                        "--demo", &SelectDemoFromArg, this, true);
 
       RegisterArgument("Amount of logging output is ARG (0 -> none, 8 -> max)",
@@ -1335,14 +1443,24 @@ namespace MFM
                              "--surge",
                              &SetSurgePerEpochFromArgs, this, true);
 
+      RegisterArgument("Set the max epoch length ARG (caps --accelerate and --surge)",
+                             "--maxepochlength",
+                             &SetMaxEpochLengthFromArgs, this, true);
+
       RegisterArgument("Each epoch, write grid AEPS image to per-sim eps/ directory",
                        "--gridImages", &SetGridImages, this, false);
 
       RegisterArgument("Each epoch, write tile AEPS image to per-sim teps/ directory",
                        "--tileImages", &SetTileImages, this, false);
 
+      RegisterArgument("Place one atom of element ARG in the grid.",
+                       "--edenseed", &SetEdenSeedFromArgs, this, true);
+
       RegisterArgument("If ARG > 0, Halts after ARG elapsed aeps.",
                        "--haltafteraeps", &SetHaltAfterAEPSFromArgs, this, true);
+
+      RegisterArgument("Halts after element symbol ARG is absent from the grid.",
+                       "--haltifextinct", &SetHaltOnExtinctionOfFromArgs, this, true);
 
       RegisterArgument("Halts if grid is empty.",
                        "--haltonempty", &SetHaltOnEmpty, this, false);
@@ -1356,13 +1474,13 @@ namespace MFM
       RegisterArgument("Suppress loading core ulam elements (DReg, etc)",
                        "--no-std", &SetNoStdFromArgs, this, false);
 
-      RegisterArgument("Include some Ulam demo elements",
+      RegisterArgument("(DEPRECATED) Include some Ulam demo elements",
                        "--ue-demos", &SetUEDemosFromArgs, this, false);
 
-      RegisterArgument("Include (older) C++ demo elements (City, etc)",
+      RegisterArgument("Run the old C++ demo elements (City, etc)",
                        "--cpp-demos", &SetCppDemosFromArgs, this, false);
 
-      RegisterArgument("Add ARG as the path to an element library (.so)",
+      RegisterArgument("Add ARG as the path to the element library (.so)",
                        "-ep|--elementpath", &RegisterElementLibraryPath, this, true);
 
       RegisterArgument("Load initial configuration from file at path ARG (string)",
@@ -1386,6 +1504,23 @@ namespace MFM
     u32 GetHaltAfterAEPS()
     {
       return m_haltAfterAEPS;
+    }
+
+    const u8 * GetHaltAfterExinctionOfSymbol()
+    {
+      if (!m_haltOnExtinctionOf)
+        FAIL(ILLEGAL_STATE);
+
+      return m_extinctionSymbol;
+    }
+
+    /*Get ptr to eden seed symbol or 0 if none*/
+    const u8 * GetEdenSeedSymbol()
+    {
+      if (!m_createEdenSeed)
+        return 0;
+
+      return m_edenSeedSymbol;
     }
 
     double GetAEPS()
@@ -1480,11 +1615,16 @@ namespace MFM
 
     }
 
+    static void AbstractDriverRunFailMessage() {
+      fprintf(stderr, "Breakpoint here to explore\n");
+    }
+
     void Run()
     {
       unwind_protect
       ({
-        MFMPrintErrorEnvironment(stderr, &unwindProtect_errorEnvironment);
+        PrintBacktrace(stderr, MFMThrownBacktraceArray, MFMThrownBacktraceSize);
+        AbstractDriverRunFailMessage();
         fprintf(stderr, "Failure reached top-level! Aborting\n");
         abort();
        },
@@ -1501,13 +1641,19 @@ namespace MFM
     Element<EC>* m_neededElements[MAX_NEEDED_ELEMENTS];
     u32 m_neededElementCount;
 
+#if 0
     OurStdElements m_se;
+#endif
     OurGrid m_grid;
 
     u64 m_ticksLastStopped;
     u64 m_totalPriorTicks;
     u64 m_currentTickBasis;
     u32 m_haltAfterAEPS;
+    bool m_haltOnExtinctionOf;
+    u8 m_extinctionSymbol[3];
+    u8 m_edenSeedSymbol[3];
+    bool m_createEdenSeed;
     bool m_haltOnEmpty;
     bool m_haltOnFull;
     bool m_suppressStdElements;
@@ -1526,6 +1672,7 @@ namespace MFM
     u32 m_accelerateAfterEpochs;
     u32 m_acceleration;
     u32 m_surgeAfterEpochs;
+    u32 m_maxEpochLength;
 
     bool m_gridImages;
     bool m_tileImages;

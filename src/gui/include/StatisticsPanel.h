@@ -45,13 +45,6 @@ namespace MFM
     typedef typename GC::EVENT_CONFIG EC;
 
     OurDriver & m_driver;
-#if 0
-    double m_AEPS;
-    double m_AER;
-    double m_overheadPercent;
-    u32 m_aepsPerFrame;
-    u32 m_currentAEPSPerEpoch;
-#endif
 
   public:
     OurDriver & GetDriver() { return m_driver; }
@@ -62,6 +55,9 @@ namespace MFM
       , m_reportersInUse(0)
       , m_displayElementsInUse(0)
       , m_displayAER(2)
+      , m_displayVersionLine(1)
+      , m_displayTimestampLine(1)
+      , m_displayAEPS(1)
       , m_maxDisplayAER(5)
       , m_screenshotTargetFPS(-1)
         //      , m_registeredButtons(0)
@@ -77,6 +73,8 @@ namespace MFM
       SetBackground(Drawing::DARK_PURPLE);
       SetFont(FONT_ASSET_ELEMENT);
     }
+
+    virtual ~StatisticsPanel() { } //avoid inline error
 
     bool LoadDetails(const char * key, LineCountingByteSource & source)
     {
@@ -296,6 +294,9 @@ namespace MFM
     u32 m_displayElementsInUse;
 
     u32 m_displayAER;
+    u32 m_displayVersionLine;
+    u32 m_displayTimestampLine;
+    u32 m_displayAEPS;
     u32 m_maxDisplayAER;
 
     OString64 m_runLabel;

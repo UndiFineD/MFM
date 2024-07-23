@@ -1,6 +1,6 @@
 /*                                              -*- mode:C++ -*-
   Util.h Globally acessible extension methods
-  Copyright (C) 2014 The Regents of the University of New Mexico.  All rights reserved.
+  Copyright (C) 2014,2018 The Regents of the University of New Mexico.  All rights reserved.
 
   This library is free software; you can redistribute it and/or
   modify it under the terms of the GNU Lesser General Public
@@ -22,7 +22,7 @@
   \file Util.h Globally acessible extension methods
   \author Trent R. Small.
   \author David H. Ackley.
-  \date (C) 2014 All rights reserved.
+  \date (C) 2014,2018 All rights reserved.
   \lgpl
  */
 #ifndef UTIL_H
@@ -80,9 +80,7 @@ namespace MFM {
      bitwidth is known to be at most 31.  Return value is undefined
      bitwidth >= 32.  \sa _GetNOnes32
    */
-  inline u32 _GetNOnes31(const u32 bitwidth) {
-    return (((u32)1)<<bitwidth)-1;
-  }
+#define _GetNOnes31(b) ((((u32)1)<<(b))-1)
 
   /**
      Get a bit mask with the rightmost \c bitwidth bits set.  Returns
@@ -97,9 +95,7 @@ namespace MFM {
      bitwidth is known to be at most 63.  Return value is undefined
      bitwidth >= 64.  \sa _GetNOnes64
    */
-  inline u64 _GetNOnes63(const u32 bitwidth) {
-    return (((u64)1)<<bitwidth)-1;
-  }
+#define _GetNOnes63(b) ((((u64)1)<<(b))-1)
 
   /**
      Get a bit mask with the rightmost \c bitwidth bits set.  Returns
@@ -122,7 +118,7 @@ namespace MFM {
   }
 
   inline u64 _ShiftFromBitNumber64(u64 value, u32 bitpos) {
-    return value>>bitpos;
+    return (u64) (value>>bitpos);
   }
 
   inline u32 _GetMask32(u32 bitpos, u32 bitwidth) {
@@ -481,6 +477,16 @@ namespace MFM {
   {
     return InterpolateColors(0xffffffff, color, percentToBrighten);
   }
+
+  /**
+     Return a pointer to the first byte of str following the first
+     occurrence of the string "%20" inside str, if it exists.  If str
+     is NULL, or "%20" is not found inside str, return str.
+  */
+  const char * StripThroughHexSpaceIfExists(const char * str) ;
+
+  bool EndsWith(const char * str, const char * suffix) ;
+
 
 }
 

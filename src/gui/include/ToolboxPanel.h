@@ -148,7 +148,7 @@ namespace MFM
       }
 
       virtual bool ExecuteFunction(u32 keysym, u32 mods) {
-        if (m_keysym >= 0 && keysym == (u32) m_keysym && mods == mods)
+        if (m_keysym >= 0 && keysym == (u32) m_keysym && m_mods == mods)
         {
           OnClick(SDL_BUTTON_LEFT);
           return true;
@@ -350,10 +350,10 @@ namespace MFM
       bool CheckHover(MouseMotionEvent& event)
       {
         if (m_parent)
-        { 
+        {
           SPoint onParent = event.GetAt();
           onParent -= m_parent->GetAbsoluteLocation();
-          if (m_element) 
+          if (m_element)
           {
             m_parent->SetElementLabel(m_element->GetName(), onParent);
             return true;
@@ -641,7 +641,7 @@ namespace MFM
       return tb;
     }
 
-    void SetElementLabel(const char * label, const SPoint at) 
+    void SetElementLabel(const char * label, const SPoint at)
     {
       m_hoverElementLabel = label;
       m_hoverElementLabelAt = at;
@@ -702,9 +702,9 @@ namespace MFM
         str.Printf("Neighborhood%D",i);
         m_neighborhoods[i].SetName(str.GetZString());
       }
-
-
     }
+
+    virtual ~ToolboxPanel() { } //avoid inline error
 
     /**
      * Sets whether or not this ToolboxPanel should render its
@@ -802,11 +802,26 @@ namespace MFM
     }
 
 
+    static int eltComp(const void * e1, const void * e2) {
+      MFM_API_ASSERT_NONNULL(e1);
+      MFM_API_ASSERT_NONNULL(e2);
+      Element<EC> * elt1 = *(Element<EC>**) e1;
+      Element<EC> * elt2 = *(Element<EC>**) e2;
+      const char * s1 = elt1->GetAtomicSymbol();
+      const char * s2 = elt2->GetAtomicSymbol();
+      MFM_API_ASSERT_NONNULL(s1);
+      MFM_API_ASSERT_NONNULL(s2);
+      return strcmp(s1,s2);
+    }
+
     void AddButtons()
     {
       // Clear all then re-add
       Panel * p;
       while ((p = this->GetTop())) this->Remove(p);
+
+      ////SORTEM BY SYMBOL DAMMIT SORTEM
+      qsort(m_heldElements,m_heldElementCount,sizeof(m_heldElements[0]),eltComp);
 
       for(u32 i = 0; i < m_toolButtonsInUse; i++)
       {

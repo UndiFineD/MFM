@@ -1,7 +1,7 @@
 /*                                              -*- mode:C++ -*-
   UlamTypeInfo.h An abstract base class for ULAM info
-  Copyright (C) 2015 The Regents of the University of New Mexico.  All rights reserved.
-  Copyright (C) 2015 Ackleyshack LLC.
+  Copyright (C) 2015-2017 The Regents of the University of New Mexico.  All rights reserved.
+  Copyright (C) 2015-2017 Ackleyshack LLC.
 
   This library is free software; you can redistribute it and/or
   modify it under the terms of the GNU Lesser General Public
@@ -22,8 +22,8 @@
 /**
   \file UlamTypeInfo.h An abstract base class for ULAM info
   \author David H. Ackley.
-  \author Elenas S. Ackley.
-  \date (C) 2015 All rights reserved.
+  \author Elena S. Ackley.
+  \date (C) 2015-2017 All rights reserved.
   \lgpl
  */
 #ifndef ULAMTYPEINFO_H
@@ -36,10 +36,11 @@ namespace MFM
 {
 
   struct UlamTypeInfoPrimitive {
-    enum PrimType { VOID, INT, UNSIGNED, BOOL, UNARY, BITS };
+    enum PrimType { VOID, INT, UNSIGNED, BOOL, UNARY, BITS, STRING, ATOM, CONST_CLASS };
 
     u8 m_primType;
     u8 m_bitSize;
+    bool m_zeroLengthArray;
     u16 m_arrayLength;
 
     static bool PrimTypeFromChar(const u8 ch, PrimType & result) ;
@@ -64,11 +65,13 @@ namespace MFM
     bool InitFrom(ByteSource & bs) ;
 
     void PrintMangled(ByteSink & bs) const ;
-    void PrintPretty(ByteSink & bs) const ;
+    void PrintPretty(ByteSink & bs, bool minpunct) const ;
 
     u32 GetBitSize() const { return m_bitSize; }
-    u32 GetArrayLength() const { return m_arrayLength; }
-    bool IsScalar() const { return GetArrayLength() == 0; }
+    u32 GetArrayLength() const { return m_arrayLength; } // check for !IsScalar first
+    void MakeScalar() { m_arrayLength = 0; m_zeroLengthArray = false; }
+    bool IsScalar() const { return !m_zeroLengthArray && GetArrayLength() == 0; }
+    bool IsZeroLengthArray() const { return m_zeroLengthArray; }
     void AssertScalar() const { if (!IsScalar()) FAIL(ILLEGAL_STATE); }
 
     u64 GetMaxOfScalarType() const
@@ -89,11 +92,14 @@ namespace MFM
 namespace MFM {
   const u32 MAX_CLASS_NAME_LENGTH = 64;
   const u32 MAX_CLASS_PARAMETERS = 16;
+  const u32 MAX_CLASS_PARAMETER_ARRAY_LENGTH = 16;
   typedef OverflowableCharBufferByteSink<MAX_CLASS_NAME_LENGTH> OStringClassName;
+  typedef OverflowableCharBufferByteSink<258> OStringStringParameterValue;
 
   struct UlamTypeInfoParameter {
     UlamTypeInfoPrimitive m_parameterType;
-    u32 m_value;  // overloaded depending on type
+    u32 m_value[MAX_CLASS_PARAMETER_ARRAY_LENGTH];  // overloaded depending on type
+    OStringStringParameterValue m_stringValue;  // stored with length at m_stringValue[0]
   };
 } //MFM
 
@@ -103,6 +109,7 @@ namespace MFM {
   struct UlamTypeInfoClass {
 
     OStringClassName m_name;
+    bool m_zeroLengthArray;
     u32 m_arrayLength;
     u32 m_bitSize;
     u32 m_classParameterCount;
@@ -118,7 +125,12 @@ namespace MFM {
     bool InitFrom(ByteSource & cbs) ;
 
     void PrintMangled(ByteSink & bs) const ;
-    void PrintPretty(ByteSink & bs) const ;
+    void PrintPretty(ByteSink & bs, bool minpunct) const ;
+
+    u32 GetArrayLength() const { return m_arrayLength; } // check for !IsScalar first
+    void MakeScalar() { m_arrayLength = 0; m_zeroLengthArray = false; }
+    bool IsScalar() const { return !m_zeroLengthArray && GetArrayLength() == 0; }
+    bool IsZeroLengthArray() const { return m_zeroLengthArray; }
   };
 } //MFM
 
@@ -128,9 +140,61 @@ namespace MFM {
     UlamTypeInfoClass m_utic;
     UlamTypeInfoPrimitive m_utip;
 
-    enum Category { PRIM, ELEMENT, QUARK, TRANSIENT, UNKNOWN } m_category;
+#define YY()                       \
+    XX('t',PRIM,"")                \
+    XX('e',ELEMENT,"element ")     \
+    XX('q',QUARK,"quark " )        \
+    XX('l',LOCALS,"<LFS>")         \
+    XX('n',TRANSIENT,"transient ")
+#define XX(ch,cat,pref) cat=ch,
+    enum Category { YY() UNKNOWN=0 } m_category;
+#undef XX
+
+    static Category GetCategoryFromUCode(u8 code) {
+      switch (code) {
+#define XX(ch,cat,pref) case ch:
+        YY()
+#undef XX
+        return (Category) code;
+      default:
+        return UNKNOWN;
+      }
+    }
+    static const char * GetPrettyPrefixFromCategory(Category categ)
+    {
+      switch (categ) {
+#define XX(ch,cat,pref) case cat: return pref;
+        YY()
+#undef XX
+      default:
+        return "UNKNOWN";
+      }
+    }
+#undef YY
+
+    u8 GetUCodeFromCategory() const { return (u8) m_category;  }
 
     UlamTypeInfo() : m_category(UNKNOWN) { }
+
+    const UlamTypeInfoPrimitive * AsPrimitive() const
+    {
+      if (!IsPrimitive()) return 0;
+      return & m_utip;
+    }
+
+    const UlamTypeInfoClass * AsClass() const
+    {
+      if (!IsClass()) return 0;
+      return & m_utic;
+    }
+
+    bool IsPrimitive() const { return m_category == PRIM; }
+    bool IsElement() const { return m_category == ELEMENT; }
+    bool IsQuark() const { return m_category == QUARK; }
+    bool IsLocals() const { return m_category == LOCALS; }
+    bool IsTransient() const { return m_category == TRANSIENT; }
+    bool IsUnknown() const { return m_category == UNKNOWN; }
+    bool IsClass() const { return IsElement() || IsQuark() || IsLocals() || IsTransient(); }
 
     bool InitFrom(const char * mangledName)
     {
@@ -141,34 +205,33 @@ namespace MFM {
     bool InitFrom(ByteSource & cbs) ;
 
     void PrintMangled(ByteSink & bs) const ;
-    void PrintPretty(ByteSink & bs) const ;
+    void PrintPretty(ByteSink & bs, bool minpunct) const ;
 
     u32 GetBitSize() const
     {
-      switch (m_category)
-      {
-      case PRIM: return m_utip.m_bitSize;
-      case ELEMENT:
-      case QUARK:
-      case TRANSIENT:
-        return m_utic.m_bitSize;
-      default:
-        FAIL(ILLEGAL_STATE);
-      }
+      if (IsPrimitive()) return m_utip.m_bitSize;
+      if (IsClass()) return m_utic.m_bitSize;
+      FAIL(ILLEGAL_STATE);
+    }
+
+    void MakeScalar() {
+      if (IsPrimitive()) return m_utip.MakeScalar();
+      if (IsClass()) return m_utic.MakeScalar();
+      FAIL(ILLEGAL_STATE);
     }
 
     u32 GetArrayLength() const
     {
-      switch (m_category)
-      {
-      case PRIM: return m_utip.GetArrayLength();
-      case QUARK:
-      case TRANSIENT:
-        return m_utic.m_arrayLength;
-      case ELEMENT:
-      default:
-        FAIL(ILLEGAL_STATE);
-      }
+      if (IsPrimitive()) return m_utip.GetArrayLength();
+      if (IsClass()) return m_utic.GetArrayLength();
+      FAIL(ILLEGAL_STATE);
+    }
+
+    bool IsZeroLengthArray() const
+    {
+      if (IsPrimitive()) return m_utip.IsZeroLengthArray();
+      if (IsClass()) return m_utic.IsZeroLengthArray();
+      FAIL(ILLEGAL_STATE);
     }
 
   };
@@ -181,7 +244,7 @@ namespace MFM {
   static P GetMinOfAs(const char * mangledType)
   {
     UlamTypeInfo uti;
-    if (!uti.InitFrom(mangledType) || uti.m_category != UlamTypeInfo::PRIM)
+    if (!uti.InitFrom(mangledType) || !uti.IsPrimitive())
       FAIL(ILLEGAL_ARGUMENT);
     uti.m_utip.AssertScalar();
     return (P) uti.m_utip.GetMinOfScalarType();
@@ -191,7 +254,7 @@ namespace MFM {
   static P GetMaxOfAs(const char * mangledType)
   {
     UlamTypeInfo uti;
-    if (!uti.InitFrom(mangledType) || uti.m_category != UlamTypeInfo::PRIM)
+    if (!uti.InitFrom(mangledType) || !uti.IsPrimitive())
       FAIL(ILLEGAL_ARGUMENT);
     uti.m_utip.AssertScalar();
     return (P) uti.m_utip.GetMaxOfScalarType();
@@ -213,11 +276,13 @@ namespace MFM {
   struct UlamClassDataMemberInfo {
     const char * m_mangledType;
     const char * m_dataMemberName;
+    const char * m_dataMemberClassName;
     u32 m_bitPosition;
 
-    UlamClassDataMemberInfo(const char * mangled, const char *name, u32 pos)
+    UlamClassDataMemberInfo(const char * mangled, const char *name, const char *classname, u32 pos)
       : m_mangledType(mangled)
       , m_dataMemberName(name)
+      , m_dataMemberClassName(classname)
       , m_bitPosition(pos)
     { }
   };

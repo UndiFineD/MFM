@@ -2,19 +2,14 @@
 
 namespace MFM
 {
-
   bool UlamTypeInfo::InitFrom(ByteSource & cbs)
   {
     cbs.SkipWhitespace();
     u8 code;
     if (cbs.Scanf("U%c_",&code) != 3) return false;
 
-    Category cat;
-    if (code=='e') cat = ELEMENT;
-    else if (code=='q') cat = QUARK;
-    else if (code=='t') cat = PRIM;
-    else if (code=='n') cat = TRANSIENT;
-    else return false;
+    Category cat = GetCategoryFromUCode(code);
+    if (cat == UNKNOWN) return false;
 
     if (cat == PRIM)
     {
@@ -30,39 +25,24 @@ namespace MFM
 
   void UlamTypeInfo::PrintMangled(ByteSink & bs) const
   {
-    switch (m_category)
-    {
-    case PRIM:
-      bs.Printf("Ut_");
-      m_utip.PrintMangled(bs);
-      break;
-    case ELEMENT:
-    case QUARK:
-      bs.Printf("U%c_",m_category==ELEMENT?'e':'q');
-      m_utic.PrintMangled(bs);
-      break;
-    case UNKNOWN:
-    default:
+    if (IsUnknown())
       FAIL(ILLEGAL_STATE);
-    }
+
+    bs.Printf("U%c_",GetUCodeFromCategory());
+
+    if (IsPrimitive())
+      m_utip.PrintMangled(bs);
+    else
+      m_utic.PrintMangled(bs);
   }
 
-  void UlamTypeInfo::PrintPretty(ByteSink & bs) const
+  void UlamTypeInfo::PrintPretty(ByteSink & bs, bool minpunct) const
   {
-    switch (m_category)
-    {
-    case PRIM:
-      m_utip.PrintPretty(bs);
-      break;
-    case ELEMENT:
-    case QUARK:
-      bs.Printf("%s ",m_category==ELEMENT?"element":"quark");
-      m_utic.PrintPretty(bs);
-      break;
-    case UNKNOWN:
-    default:
-      FAIL(ILLEGAL_STATE);
-    }
+    if (!minpunct) bs.Printf("%s",GetPrettyPrefixFromCategory(m_category));
+
+    if (IsPrimitive()) m_utip.PrintPretty(bs,minpunct);
+    else if (IsClass()) m_utic.PrintPretty(bs,minpunct);
+    else FAIL(ILLEGAL_STATE);
   }
 
   bool UlamTypeInfoPrimitive::PrimTypeFromChar(const u8 ch, PrimType & result)
@@ -75,6 +55,9 @@ namespace MFM
     case 'u': type = UNSIGNED; break;
     case 'v': type = VOID; break;
     case 'y': type = UNARY; break;
+    case 's': type = STRING; break;
+    case 'a': type = ATOM; break;
+    case 'c': type = CONST_CLASS; break;
     default: return false;
     }
     result = type;
@@ -90,6 +73,9 @@ namespace MFM
     case UNSIGNED: return 'u';
     case VOID: return 'v';
     case UNARY: return 'y';
+    case STRING: return 's';
+    case ATOM: return 'a';
+    case CONST_CLASS: return 'c';
     }
     FAIL(ILLEGAL_ARGUMENT);
   }
@@ -103,6 +89,9 @@ namespace MFM
     case UNSIGNED: return "Unsigned";
     case VOID: return "Void";
     case UNARY: return "Unary";
+    case STRING: return "String";
+    case ATOM: return "Atom";
+    case CONST_CLASS: FAIL(INCOMPLETE_CODE); //XXX or..???
     }
     FAIL(ILLEGAL_ARGUMENT);
   }
@@ -116,14 +105,23 @@ namespace MFM
     case UNSIGNED: return 32;
     case VOID: return 0;
     case UNARY: return 32;
+    case STRING: return 32;
+    case ATOM: return 96;
+    case CONST_CLASS: FAIL(INCOMPLETE_CODE); //XXX or..???
     }
     FAIL(ILLEGAL_ARGUMENT);
   }
 
   bool UlamTypeInfoPrimitive::InitFrom(ByteSource & cbs)
   {
-    u32 arraylen, bitsize, namelen;
-    if (!cbs.Scan(arraylen, Format::LEX32, 0)) return false;
+    u32 arraylen = 0u, bitsize, namelen;
+
+    /* Special case: arraylen 'n11' means zero length array (while '10' means scalar instead of array) */
+    s32 negval = cbs.ReadNegativeLex32();
+    if (negval > 0) return false; // bad negative format
+    if (negval < 0 && negval != -1) return false; // only n11 supported in this context
+
+    if (negval == 0 && !cbs.Scan(arraylen, Format::LEX32, 0)) return false;  // wasn't negative
     if (!cbs.Scan(bitsize, Format::LEX32, 0)) return false;
     if (!cbs.Scan(namelen, Format::LEXHD, 0)) return false;
     if (namelen != 1) return false;
@@ -135,6 +133,7 @@ namespace MFM
 
     m_primType = type;
     m_bitSize = bitsize;
+    m_zeroLengthArray = (negval < 0);
     m_arrayLength = arraylen;
 
     return true;
@@ -142,24 +141,35 @@ namespace MFM
 
   void UlamTypeInfoPrimitive::PrintMangled(ByteSink & bs) const
   {
-    bs.Printf("%D%D1%c", m_arrayLength, m_bitSize, CharFromPrimType(GetPrimType()));
+    if (m_zeroLengthArray)
+      bs.Printf("n11");
+    else
+      bs.Printf("%D", m_arrayLength);
+    bs.Printf("%D1%c", m_bitSize, CharFromPrimType(GetPrimType()));
   }
 
-  void UlamTypeInfoPrimitive::PrintPretty(ByteSink & bs) const
+  void UlamTypeInfoPrimitive::PrintPretty(ByteSink & bs,bool minpunct) const
   {
     bs.Printf("%s", NameFromPrimType(GetPrimType()));
 
     if (m_bitSize != DefaultSizeFromPrimType(GetPrimType()))
       bs.Printf("(%d)", m_bitSize);
 
-    if (m_arrayLength > 0)
+    if (m_zeroLengthArray)
+      bs.Printf("[]");
+    else if (m_arrayLength > 0)
       bs.Printf("[%d]", m_arrayLength);
   }
 
   bool UlamTypeInfoClass::InitFrom(ByteSource & cbs)
   {
-    u32 arraylen, bitsize, namelen, parms;
-    if (!cbs.Scan(arraylen, Format::LEX32, 0)) return false;
+    u32 arraylen, bitsize, namelen, parms; 
+
+    s32 negval = cbs.ReadNegativeLex32();
+    if (negval > 0) return false; // bad negative format
+    if (negval < 0 && negval != -1) return false; // only n11 supported in this context
+
+    if (negval == 0 && !cbs.Scan(arraylen, Format::LEX32, 0)) return false; 
     if (!cbs.Scan(bitsize, Format::LEX32, 0)) return false;
     if (!cbs.Scan(namelen, Format::LEXHD, 0)) return false;
 
@@ -179,23 +189,59 @@ namespace MFM
       UlamTypeInfoParameter uticp;
       if (!uticp.m_parameterType.InitFrom(cbs)) return false;
 
-      s32 ch = cbs.Read();
-      if (ch < 0) return false;
-      if (ch != 'n') cbs.Unread();
+      if (uticp.m_parameterType.m_primType == UlamTypeInfoPrimitive::STRING)
+	{
+	  u32 strlen;
+	  if (cbs.Scanf("%02x",&strlen) != 1) return false;
+	  uticp.m_stringValue.Reset();
+	  uticp.m_stringValue.WriteByte((u8) strlen); // length into [0]
+	  for (u32 j = 0; j < strlen; ++j) {
+	    u32 chr;
+	    if (cbs.Scanf("%02x",&chr) != 1) return false;
+	    uticp.m_stringValue.WriteByte((u8) chr);
+	  }
+	}
+      else if (uticp.m_parameterType.m_primType == UlamTypeInfoPrimitive::CONST_CLASS)
+        {
+	  u32 hexlen;
+	  if (!cbs.Scan(hexlen, Format::LEXHD, 0)) return false;
 
-      if (!cbs.Scan(uticp.m_value, Format::LEX32, 0)) return false;
-      if (ch == 'n') {
-        if (uticp.m_value == 0)
-          uticp.m_value = (u32) S32_MIN;
-        else
-          uticp.m_value = (u32) -uticp.m_value;
-      }
+	  for(u32 j = 0; j < hexlen; j++)
+	    {
+	      s32 ch = cbs.Read(); //throw away for now..
+	      if (ch < 0) return false;
+	    }
+        }
+      else
+	{
+	  u32 arrayloop = uticp.m_parameterType.m_arrayLength;
+          bool zeroarraylen = uticp.m_parameterType.m_zeroLengthArray;
+	  if (arrayloop > MAX_CLASS_PARAMETER_ARRAY_LENGTH) return false;
+          bool isscalar = (arrayloop == 0 && !zeroarraylen);
+	  arrayloop = (isscalar ? 1 : arrayloop);
+
+	  for(u32 j = 0; j < arrayloop; j++)
+	    {
+	      s32 ch = cbs.Read();
+	      if (ch < 0) return false;
+	      if (ch != 'n') cbs.Unread();
+
+	      if (!cbs.Scan(uticp.m_value[j], Format::LEX32, 0)) return false;
+	      if (ch == 'n') {
+		if (uticp.m_value[j] == 0)
+		  uticp.m_value[j] = (u32) S32_MIN;
+		else
+		  uticp.m_value[j] = (u32) -uticp.m_value[j];
+	      }
+	    }
+	}
 
       if (i < MAX_CLASS_PARAMETERS)
         parameters[i] = uticp;
     }
 
     m_name = name;
+    m_zeroLengthArray = (negval < 0);
     m_arrayLength = arraylen;
     m_bitSize = bitsize;
     m_classParameterCount = parms;
@@ -209,8 +255,12 @@ namespace MFM
 
   void UlamTypeInfoClass::PrintMangled(ByteSink & bs) const
   {
-    bs.Printf("%D%D%H%s",
-              m_arrayLength,
+    if (m_zeroLengthArray)
+      bs.Printf("n11");
+    else
+      bs.Printf("%D", m_arrayLength);
+
+    bs.Printf("%D%H%s",
               m_bitSize,
               m_name.GetLength(),
               m_name.GetZString());
@@ -220,54 +270,106 @@ namespace MFM
     for (u32 i = 0; i < m_classParameterCount; ++i)
     {
       if (i < MAX_CLASS_PARAMETERS)
-      {
-        m_classParameters[i].m_parameterType.PrintMangled(bs);
-        if (m_classParameters[i].m_parameterType.GetPrimType() == UlamTypeInfoPrimitive::INT
-            && ((s32) m_classParameters[i].m_value) < 0)
-        {
-          if (((s32) m_classParameters[i].m_value) == S32_MIN)
-            bs.Printf("n%D",0);
-          else
-            bs.Printf("n%D",-m_classParameters[i].m_value);
-        }
-        else
-          bs.Printf("%D",m_classParameters[i].m_value);
-      }
+	{
+	  m_classParameters[i].m_parameterType.PrintMangled(bs);
+	  if (m_classParameters[i].m_parameterType.GetPrimType() == UlamTypeInfoPrimitive::STRING)
+	    {
+	      const char * s = m_classParameters[i].m_stringValue.GetBuffer();
+	      u32 len = *s++;
+	      bs.Printf("%02x",len);
+	      for (u32 j = 0; j < len; ++j)
+		bs.Printf("%02x",s[j]);
+	    }
+	  else
+	    {
+	      u32 arrayloop = m_classParameters[i].m_parameterType.m_arrayLength;
+              bool zeroarraylen = m_classParameters[i].m_parameterType.m_zeroLengthArray;
+
+	      if (arrayloop > MAX_CLASS_PARAMETER_ARRAY_LENGTH) FAIL(ILLEGAL_STATE);
+              bool isscalar = (arrayloop == 0 && !zeroarraylen);
+              arrayloop = (isscalar ? 1 : arrayloop);
+
+	      for(u32 j = 0; j < arrayloop; j++)
+		{
+		  if (m_classParameters[i].m_parameterType.GetPrimType() == UlamTypeInfoPrimitive::INT
+		      && ((s32) m_classParameters[i].m_value[j]) < 0)
+		    {
+		      if (((s32) m_classParameters[i].m_value[j]) == S32_MIN)
+			bs.Printf("n%D",0);
+		      else
+			bs.Printf("n%D", - (s32) m_classParameters[i].m_value[j]);
+		    }
+		  else
+		    bs.Printf("%D",m_classParameters[i].m_value[j]);
+		}
+	    }
+	}
       else
-        bs.Printf("0");
+	bs.Printf("0");
     }
   }
 
-  void UlamTypeInfoClass::PrintPretty(ByteSink & bs) const
+  void UlamTypeInfoClass::PrintPretty(ByteSink & bs,bool minpunct) const
   {
     m_name.AppendTo(bs);
 
     if (m_classParameterCount==0)
       return;
 
-    bs.Printf("(");
+    bs.Printf(minpunct?"<":"(");
+
     for (u32 i = 0; i < m_classParameterCount; ++i)
     {
-      if (i > 0) bs.Printf(",");
+      if (i > 0)
+        bs.Printf(minpunct?" ":",");
+
       if (i < MAX_CLASS_PARAMETERS)
       {
-        m_classParameters[i].m_parameterType.PrintPretty(bs);
-        switch (m_classParameters[i].m_parameterType.GetPrimType())
-        {
-        case UlamTypeInfoPrimitive::INT:
-          bs.Printf("=%d",m_classParameters[i].m_value);
-          break;
-        case UlamTypeInfoPrimitive::BITS:
-          bs.Printf("=0x%x",m_classParameters[i].m_value);
-          break;
-        default:
-          bs.Printf("=%uu",m_classParameters[i].m_value);
-        }
+        //XXX COMPACTIFY TEMPLATES?
+        if (!minpunct) m_classParameters[i].m_parameterType.PrintPretty(bs, minpunct);
+
+	if(m_classParameters[i].m_parameterType.GetPrimType() == UlamTypeInfoPrimitive::STRING)
+	  {
+            //XXX COMPACTIFY TEMPLATES?  bs.Printf("=");
+	    bs.PrintDoubleQuotedCStringWithLength(m_classParameters[i].m_stringValue.GetBuffer());
+	  }
+	else
+	  {
+	    u32 arrayloop = m_classParameters[i].m_parameterType.m_arrayLength;
+            bool zeroarraylen = m_classParameters[i].m_parameterType.m_zeroLengthArray;
+
+	    if (arrayloop > MAX_CLASS_PARAMETER_ARRAY_LENGTH) FAIL(ILLEGAL_STATE);
+
+            bool isscalar = (arrayloop == 0 && !zeroarraylen);
+            arrayloop = (isscalar ? 1 : arrayloop);
+
+            //XXX COMPACTIFY TEMPLATES? bs.Printf("=");
+	    if(arrayloop > 1)
+	      bs.Printf("{"); //start of array values
+	    for(u32 j = 0; j < arrayloop; j++)
+	      {
+		if(j > 0)
+		  bs.Printf(",");
+		switch (m_classParameters[i].m_parameterType.GetPrimType())
+		  {
+		  case UlamTypeInfoPrimitive::INT:
+		    bs.Printf("%d",m_classParameters[i].m_value[j]);
+		    break;
+		  case UlamTypeInfoPrimitive::BITS:
+		    bs.Printf("0x%x",m_classParameters[i].m_value[j]);
+		    break;
+		  default:
+		    bs.Printf("%uu",m_classParameters[i].m_value[j]);
+		  }
+	      }
+	    if(arrayloop > 1)
+	      bs.Printf("}"); //end of array
+	  }
       }
       else
         bs.Printf("?");
     }
-    bs.Printf(")");
+    bs.Printf(minpunct?">":")"); //end of parameters
   }
 
   u64 UlamTypeInfoPrimitive::GetExtremeOfScalarType(bool wantMax) const

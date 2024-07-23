@@ -44,6 +44,11 @@ namespace MFM
   template<class EC>
   class Element_City_Sidewalk : public Element<EC>
   {
+  public:
+    virtual u32 GetTypeFromThisElement() const {
+      return 0xCE1f;
+    }
+    
     // Extract short names for parameter types
     typedef typename EC::ATOM_CONFIG AC;
     typedef typename AC::ATOM_TYPE T;
@@ -223,7 +228,7 @@ namespace MFM
       return 0xff808080;
     }
 
-    virtual u32 GetAtomColor(const T& atom, u32 selector) const
+    virtual u32 GetAtomColor(const ElementTable<EC> & et, const UlamClassRegistry<EC> & ucr, const T& atom, u32 selector) const
     {
       if(IsReadyToBuild(atom))
       {

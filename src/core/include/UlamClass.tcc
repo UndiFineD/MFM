@@ -1,9 +1,7 @@
 /* -*- C++ -*- */
 
 #include "Fail.h"
-//#include "Tile.h"
 #include "Random.h"
-//#include "EventWindow.h"
 #include "Base.h"
 #include "UlamTypeInfo.h"
 #include "UlamClassRegistry.h"
@@ -28,8 +26,16 @@ namespace MFM {
   {
     const UlamElement<EC> * ueltptr = (UlamElement<EC> *) uc.LookupElementTypeFromContext(type);
     if (!ueltptr) return false;
-    return ueltptr->internalCMethodImplementingIs(classPtr);
+    return (ueltptr->internalCMethodImplementingIs(classPtr));
   } //IsMethod (static)
+
+  template <class EC>
+  s32 UlamClass<EC>::GetRelativePositionOfBaseClass(const UlamContext<EC>& uc, u32 type, const UlamClass<EC> * baseclassPtr)
+  {
+    const UlamElement<EC> * ueltptr = (UlamElement<EC> *) uc.LookupElementTypeFromContext(type);
+    if (!ueltptr) return -1;
+    return ueltptr->internalCMethodImplementingGetRelativePositionOfBaseClass(baseclassPtr);
+  } //GetRelativePositionOfBaseClass (static)
 
   typedef void (*VfuncPtr)(); // Generic function pointer we'll cast at point of use
   template <class EC>
@@ -55,7 +61,7 @@ namespace MFM {
   }
 
   inline static void doNL(ByteSink & bs, u32 flags, u32 indent) {
-    if (flags & UlamClassPrintFlags::PRINT_INDENTED_LINES) 
+    if (flags & UlamClassPrintFlags::PRINT_INDENTED_LINES)
     {
       bs.Printf("\n");
       for (u32 i = 0; i < indent; ++i) bs.Printf(" ");
@@ -74,12 +80,16 @@ namespace MFM {
     if (flags & (PRINT_MEMBER_VALUES|PRINT_MEMBER_NAMES|PRINT_MEMBER_TYPES))
     {
       bool opened = false;
+      OString128 lastBaseClassName;
       for (s32 i = 0; i < GetDataMemberCount(); ++i)
       {
         const UlamClassDataMemberInfo & dmi = GetDataMemberInfo((u32) i);
 	UlamTypeInfo utin;
         if (!utin.InitFrom(dmi.m_mangledType))
           FAIL(ILLEGAL_STATE);
+
+        // Skip 0 length arrays period
+        if (utin.IsZeroLengthArray()) continue;
 
         // Skip size 0 members unless they reeeally want them
         if (utin.GetBitSize() == 0 && !(flags & PRINT_SIZE0_MEMBERS)) continue;
@@ -98,8 +108,27 @@ namespace MFM {
         }
         if (flags & PRINT_MEMBER_TYPES)
         {
-          utin.PrintPretty(bs);
+          utin.PrintPretty(bs,false);
           bs.Printf(" ");
+        }
+
+        if (true/*flags & PRINT_BASE_CLASS_NAMES*/)
+        {
+          OString128 className;
+          UlamTypeInfo utin2;
+          if (!utin2.InitFrom(dmi.m_dataMemberClassName))
+            FAIL(ILLEGAL_STATE);
+          utin2.PrintPretty(className,true);
+          if (!className.Equals(lastBaseClassName))
+          {
+            if (lastBaseClassName.GetLength() > 0)
+            {
+              bs.Printf(")");
+            }
+            bs.Printf("%s(",className.GetZString());
+            doNL(bs,flags,indent);
+            lastBaseClassName = className;
+          }
         }
 
         if (flags & PRINT_MEMBER_NAMES)
@@ -117,26 +146,28 @@ namespace MFM {
 
           for (u32 idx = 0; idx < MAX(arraysize,1u); ++idx)
           {
+            if (utin.IsLocals()) break; // locals have no data members (and cannot be in arrays..)
+
             if (arraysize > 0)
             {
-              if (idx==0) bs.Printf("[%d]",arraysize);
-              bs.Printf(", [%d]=",idx);
+              if (idx>0) bs.Printf(",");
+              bs.Printf("[%d]=",idx);
             }
 
-#if 0 
+#if 0
             u32 offset = T::ATOM_FIRST_STATE_BIT;
 
-            if (this->IsUlamTransient()) 
+            if (this->IsUlamTransient())
               offset = 0;
 #else
             u32 offset = 0;  // barf.  barf barf barf
 #endif
 
-            u32 startPos = 
+            u32 startPos =
               baseStatePos + dmi.m_bitPosition
               + offset + idx * bitsize;
 
-            if (utin.m_category == UlamTypeInfo::QUARK || utin.m_category == UlamTypeInfo::TRANSIENT)
+            if (utin.IsQuark() || utin.IsTransient())
             {
               if (flags & PRINT_RECURSE_QUARKS)
               {
@@ -144,23 +175,20 @@ namespace MFM {
                 const UlamClass * memberClass = ucr.GetUlamClassByMangledName(mangledName);
                 if (memberClass)
                 {
-                  memberClass->PrintClassMembers(ucr, bs, stg, flags, baseStatePos + dmi.m_bitPosition, indent + 1);
+                  u32 flatFlags = flags;
+                  // Only go down one more level?
+                  //flatFlags &= ~UlamClassPrintFlags::PRINT_RECURSE_QUARKS;
+                  memberClass->PrintClassMembers(ucr, bs, stg, flatFlags, startPos, indent + 1);
                   continue;
                 }
               }
 
-              if (bitsize > 64) 
+              if (bitsize > 64)
               {
                 // Just do hex, aligned from the right
-                bs.Printf("%d: 0x", bitsize); 
-
-                u32 start = bitsize%4;
-                if (start) bs.Printf("%x", stg.Read(startPos, start));
-
-                for (u32 i = start; i < bitsize; i += 4) 
-                  bs.Printf("%x", stg.Read(startPos + i, 4));
-
-              } 
+                bs.Printf("%d: 0x", bitsize);
+                stg.PrintHex(bs, startPos, bitsize);
+              }
               else
               {
                 u64 val = stg.ReadLong(startPos, bitsize);
@@ -169,8 +197,14 @@ namespace MFM {
               continue;
             }
 
+            if (!utin.IsPrimitive()) FAIL(ILLEGAL_STATE); // Can't happen now right?
 
-            if (utin.m_category != UlamTypeInfo::PRIM) FAIL(ILLEGAL_STATE); // Can't happen now right?
+            if (utin.m_utip.GetPrimType() == UlamTypeInfoPrimitive::ATOM) {
+              // Just hex atoms for now
+              bs.Printf("0x");
+              stg.PrintHex(bs, startPos, bitsize);
+              continue;
+            }
 
             u64 val = stg.ReadLong(startPos, bitsize);
             switch (utin.m_utip.GetPrimType())
@@ -187,6 +221,7 @@ namespace MFM {
               {
                 bs.Print(val);
                 if (flags & PRINT_MEMBER_BITVALS) addHex(bs,val);
+                if (flags & PRINT_MEMBER_ASCII) addASCII(bs,val);
                 break;
               }
 
@@ -223,6 +258,13 @@ namespace MFM {
                 bs.Printf("void"); // should be impossible?
                 break;
               }
+
+            case UlamTypeInfoPrimitive::STRING:
+              {
+                bs.Printf("<string>"); // XXX NYI
+                break;
+              }
+
             default:
               FAIL(ILLEGAL_STATE);
             }
@@ -238,8 +280,15 @@ namespace MFM {
   template <class EC>
   void UlamClass<EC>::addHex(ByteSink & bs, u64 val)
   {
+    if (val < 2) return;
     bs.Printf("/0x");
     bs.Print(val, Format::HEX);
+  }
+
+  template <class EC>
+  void UlamClass<EC>::addASCII(ByteSink & bs, u64 val)
+  {
+    if (val < 0x100 && isprint((u32) val)) bs.Printf("/'%c'", (u32) val);
   }
 
 } //MFM

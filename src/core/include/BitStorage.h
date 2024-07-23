@@ -1,6 +1,6 @@
 /*                                              -*- mode:C++ -*-
   BitStorage.h An interface for accessing bits stored in arbitrary-sized groups
-  Copyright (C) 2016 The Regents of the University of New Mexico.  All rights reserved.
+  Copyright (C) 2016-2018 The Regents of the University of New Mexico.  All rights reserved.
 
   This library is free software; you can redistribute it and/or
   modify it under the terms of the GNU Lesser General Public
@@ -21,7 +21,7 @@
 /**
   \file BitStorage.h An interface for accessing bits stored in arbitrary-sized groups
   \author David H. Ackley.
-  \date (C) 2016 All rights reserved.
+  \date (C) 2016-2018 All rights reserved.
   \lgpl
  */
 #ifndef BITSTORAGE_H
@@ -84,7 +84,9 @@ namespace MFM {
     typedef typename EC::ATOM_CONFIG AC;
     typedef typename AC::ATOM_TYPE T;
 
-    BitStorage() { } 
+    BitStorage(u32 bs) : m_bitsize(bs) { }
+
+    const u32 m_bitsize;
 
     virtual ~BitStorage() { }
 
@@ -151,7 +153,12 @@ namespace MFM {
      */
     virtual void WriteAtom(u32 pos, const T& val) = 0;
 
-    virtual u32 GetBitSize() const = 0;
+    inline u32 GetBitSize() const { return m_bitsize; }
+
+    virtual const char * GetUlamTypeMangledName() const = 0;
+
+    void PrintHex(ByteSink & bs, u32 startPos = 0, u32 len = GetBitSize()) const ;
+
   }; //BitStorage (pure)
 
   /**
@@ -163,11 +170,11 @@ namespace MFM {
     typedef typename EC::ATOM_CONFIG AC;
     typedef typename AC::ATOM_TYPE T;
 
-    BitVectorBitStorage(const BV & toCopy) : m_stg(toCopy) { }
+    BitVectorBitStorage(const BV & toCopy) : BitStorage<EC>(BV::BITS), m_stg(toCopy) { }
 
-    BitVectorBitStorage(const u32 * const values) : m_stg(values) { }
+    BitVectorBitStorage(const u32 * const values) : BitStorage<EC>(BV::BITS), m_stg(values) { }
 
-    BitVectorBitStorage() { }
+    BitVectorBitStorage() : BitStorage<EC>(BV::BITS) { }
 
     BV m_stg;
 
@@ -213,10 +220,12 @@ namespace MFM {
       m_stg.WriteBig(pos, T::BPA, tval.GetBits());
     }
 
-    virtual u32 GetBitSize() const
+    virtual const char * GetUlamTypeMangledName() const
     {
-      return BV::BITS;
+      FAIL(ILLEGAL_STATE);
+      return NULL;
     }
+
   }; //BitVectorBitStorage
 
   /**
@@ -228,7 +237,12 @@ namespace MFM {
     typedef typename EC::ATOM_CONFIG AC;
     typedef typename AC::ATOM_TYPE T;
 
-    AtomRefBitStorage(T & toModify) : m_stg(toModify) { }
+    explicit AtomRefBitStorage(T & toModify) : BitStorage<EC>(T::BPA), m_stg(toModify) { }
+
+  private:
+    AtomRefBitStorage(const AtomRefBitStorage<EC> & toCopy) ;  // Declare away
+
+  public:
 
     T& m_stg;
 
@@ -272,16 +286,17 @@ namespace MFM {
       WriteAtom(tval);
     }
 
-    virtual u32 GetBitSize() const
-    {
-      return T::BPA;
-    }
-
     u32 GetType() { return m_stg.GetType(); }
 
     T ReadAtom() const { return m_stg; } //a copy
 
     void WriteAtom(const T& tval) { m_stg = tval; }
+
+    virtual const char * GetUlamTypeMangledName() const
+    {
+      FAIL(ILLEGAL_STATE);
+      return NULL;
+    }
 
   }; //AtomRefBitStorage
 
@@ -294,11 +309,17 @@ namespace MFM {
     typedef typename EC::ATOM_CONFIG AC;
     typedef typename AC::ATOM_TYPE T;
 
-    AtomBitStorage(const T & toCopy) : AtomRefBitStorage<EC>(m_copy), m_copy(toCopy) { }
+    AtomBitStorage(const T & toCopy) : AtomRefBitStorage<EC>(m_atom), m_atom(toCopy) { }
 
-    AtomBitStorage() : AtomRefBitStorage<EC>(m_copy) { }
+    AtomBitStorage() : AtomRefBitStorage<EC>(m_atom) { }
 
-    T m_copy;
+    T m_atom;
+
+    const T& GetAtom() const { return m_atom; }
+
+  private:
+    AtomBitStorage(const AtomBitStorage<EC> & toCopyABS); //declare away
+
   }; //AtomBitStorage
 
 } // MFM

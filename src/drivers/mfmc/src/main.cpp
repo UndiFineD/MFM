@@ -6,6 +6,15 @@
 #include "UlamCustomElements.h"
 #endif
 
+// Fri Jan 22 12:30:58 2021 WE DON'T REALLY WANT THE (C++)
+// 'StdElements' ANYMORE, BUT THEY DO STILL KIND OF WORK,
+// IF WE INCLUDE THEIR HEADER..
+#include "StdElements.h" 
+
+#include "GlobalHooks.h" // barf.
+
+void * XXXDRIVER = 0;
+
 namespace MFM
 {
   template <class GC, u32 W, u32 H>
@@ -17,7 +26,7 @@ namespace MFM
   struct GridConfigCode {
 
     enum TileType { TileUNSPEC
-#define XX(A,B) , Tile##A
+#define XX(A,B,C) , Tile##A
 #include "TileSizes.inc"
 #undef XX
       , TileUPPER_BOUND
@@ -27,7 +36,7 @@ namespace MFM
     {
       switch (t)
       {
-#define XX(A,B) case Tile##A: return *#A;
+#define XX(A,B,C) case Tile##A: return *#A;
 #include "TileSizes.inc"
 #undef XX
       default: FAIL(ILLEGAL_ARGUMENT);
@@ -47,16 +56,18 @@ namespace MFM
     TileType tileType;
     u32 gridWidth;
     u32 gridHeight;
+    GridLayoutPattern gridLayout;
 
-    GridConfigCode(TileType t = TileUNSPEC, u32 width = 0, u32 height = 0)
+    GridConfigCode(TileType t = TileUNSPEC, u32 width = 0, u32 height = 0, GridLayoutPattern layout = GRID_LAYOUT_CHECKERBOARD)
       : tileType(t)
       , gridWidth(width)
       , gridHeight(height)
+      , gridLayout(layout)
     { }
 
-    bool Set(TileType t, u32 width, u32 height)
+    bool Set(TileType t, u32 width, u32 height, GridLayoutPattern layout)
     {
-      return SetTileType(t) && SetGridWidth(width) && SetGridHeight(height);
+      return SetTileType(t) && SetGridWidth(width) && SetGridHeight(height) && SetGridLayout(layout);
     }
 
     bool SetTileType(TileType t)
@@ -81,13 +92,26 @@ namespace MFM
       return true;
     }
 
+    bool SetGridLayout(GridLayoutPattern layout) {
+      gridLayout = layout;
+      return true;
+    }
+
     bool Read(ByteSource & bs)
     {
       u32 w, h;
       u8 ch;
+      bool doublebrace = false;
 
-      if (bs.Scanf("{%d%c%d}", &w, &ch, &h) != 5)
+      if (bs.Scanf("{") != 1) return false;
+      if (bs.Scanf("{") == 1)
+	doublebrace = true;
+      else
+	bs.Unread();
+
+      if (bs.Scanf("%d%c%d}", &w, &ch, &h) != 4)
         return false;
+      if (doublebrace && bs.Scanf("}") != 1) return false;
 
       if (ch < GridConfigCode::GetMinTypeCode() ||
           ch > GridConfigCode::GetMaxTypeCode())
@@ -98,10 +122,12 @@ namespace MFM
 
       SetGridWidth(w);
       SetGridHeight(h);
+      SetGridLayout(doublebrace ? GRID_LAYOUT_STAGGERED : GRID_LAYOUT_CHECKERBOARD);
       SetTileType((GridConfigCode::TileType)
                   ((ch - GridConfigCode::GetMinTypeCode()) + GridConfigCode::TileUNSPEC + 1));
       return true;
     }
+
   };
 
   /////
@@ -115,8 +141,8 @@ namespace MFM
 
   /////
   // Tile types
-#define XX(A,B) \
-  typedef GridConfig<OurEventConfigAll, B, EVENT_HISTORY_SIZE> OurGridConfigTile##A;
+#define XX(A,B,C)							\
+  typedef GridConfig<OurEventConfigAll, B, C, EVENT_HISTORY_SIZE> OurGridConfigTile##A;
 #include "TileSizes.inc"
 #undef XX
   /*
@@ -154,6 +180,8 @@ namespace MFM
     typedef typename EC::ATOM_CONFIG AC;
     typedef typename AC::ATOM_TYPE T;
 
+    typedef Grid<GC> OurGrid;
+    
     struct ThreadStamper : public DateTimeStamp
     {
       typedef DateTimeStamp Super;
@@ -177,40 +205,40 @@ namespace MFM
 
       if (this->m_includeCPPDemos)
       {
-        this->NeedElement(&Element_Wall<EC>::THE_INSTANCE);
-        this->NeedElement(&Element_Res<EC>::THE_INSTANCE);
-        this->NeedElement(&Element_Dreg<EC>::THE_INSTANCE);
-        this->NeedElement(&Element_Sorter<EC>::THE_INSTANCE);
-        this->NeedElement(&Element_Data<EC>::THE_INSTANCE);
-        this->NeedElement(&Element_Emitter<EC>::THE_INSTANCE);
-        this->NeedElement(&Element_Consumer<EC>::THE_INSTANCE);
-        this->NeedElement(&Element_Block<EC>::THE_INSTANCE);
-        this->NeedElement(&Element_ForkBomb1<EC>::THE_INSTANCE);
-        this->NeedElement(&Element_ForkBomb2<EC>::THE_INSTANCE);
-        this->NeedElement(&Element_ForkBomb3<EC>::THE_INSTANCE);
-        this->NeedElement(&Element_AntiForkBomb<EC>::THE_INSTANCE);
-        this->NeedElement(&Element_MQBar<EC>::THE_INSTANCE);
-        this->NeedElement(&Element_Mover<EC>::THE_INSTANCE);
-        this->NeedElement(&Element_Indexed<EC>::THE_INSTANCE);
-        this->NeedElement(&Element_Fish<EC>::THE_INSTANCE);
-        this->NeedElement(&Element_Shark<EC>::THE_INSTANCE);
-        this->NeedElement(&Element_Xtal_Sq1<EC>::THE_INSTANCE);
-        this->NeedElement(&Element_Xtal_L12<EC>::THE_INSTANCE);
-        this->NeedElement(&Element_Xtal_R12<EC>::THE_INSTANCE);
-        this->NeedElement(&Element_Xtal_General<EC>::THE_INSTANCE);
-        this->NeedElement(&Element_Creg<EC>::THE_INSTANCE);
-        this->NeedElement(&Element_Dmover<EC>::THE_INSTANCE);
-        this->NeedElement(&Element_CheckerForkBlue<EC>::THE_INSTANCE);
-        this->NeedElement(&Element_CheckerForkRed<EC>::THE_INSTANCE);
-        this->NeedElement(&Element_Wanderer_Cyan<EC>::THE_INSTANCE);
-        this->NeedElement(&Element_Wanderer_Magenta<EC>::THE_INSTANCE);
+        this->NeedElement(&Element_Wall<EC>::THE_INSTANCE);//0xCE00
+        this->NeedElement(&Element_Res<EC>::THE_INSTANCE);//0xCE01
+        this->NeedElement(&Element_Dreg<EC>::THE_INSTANCE);//0xCE02
+        this->NeedElement(&Element_Sorter<EC>::THE_INSTANCE);//0xCE03
+        this->NeedElement(&Element_Data<EC>::THE_INSTANCE);//0xCE04
+        this->NeedElement(&Element_Emitter<EC>::THE_INSTANCE);//0xCE05
+        this->NeedElement(&Element_Consumer<EC>::THE_INSTANCE);//0xCE06
+        this->NeedElement(&Element_Block<EC>::THE_INSTANCE);//0xCE07
+        this->NeedElement(&Element_ForkBomb1<EC>::THE_INSTANCE);//0xCE08
+        this->NeedElement(&Element_ForkBomb2<EC>::THE_INSTANCE);//0xCE09
+        this->NeedElement(&Element_ForkBomb3<EC>::THE_INSTANCE);//0xCE0a
+        this->NeedElement(&Element_AntiForkBomb<EC>::THE_INSTANCE);//0xCE0b
+        this->NeedElement(&Element_MQBar<EC>::THE_INSTANCE);//0xCE0c
+        this->NeedElement(&Element_Mover<EC>::THE_INSTANCE);//0xCE0d
+        this->NeedElement(&Element_Indexed<EC>::THE_INSTANCE);//0xCE0e
+        this->NeedElement(&Element_Fish<EC>::THE_INSTANCE);//0xCE0f
+        this->NeedElement(&Element_Shark<EC>::THE_INSTANCE);//0xCE10
+        this->NeedElement(&Element_Xtal_Sq1<EC>::THE_INSTANCE);//0xCE11
+        this->NeedElement(&Element_Xtal_L12<EC>::THE_INSTANCE);//0xCE12
+        this->NeedElement(&Element_Xtal_R12<EC>::THE_INSTANCE);//0xCE13
+        this->NeedElement(&Element_Xtal_General<EC>::THE_INSTANCE);//0xCE14
+        this->NeedElement(&Element_Creg<EC>::THE_INSTANCE);//0xCE15
+        this->NeedElement(&Element_Dmover<EC>::THE_INSTANCE);//0xCE16
+        this->NeedElement(&Element_CheckerForkBlue<EC>::THE_INSTANCE);//0xCE17
+        this->NeedElement(&Element_CheckerForkRed<EC>::THE_INSTANCE);//0xCE18
+        this->NeedElement(&Element_Wanderer_Cyan<EC>::THE_INSTANCE);//0xCE19
+        this->NeedElement(&Element_Wanderer_Magenta<EC>::THE_INSTANCE);//0xCE1a
 
-        this->NeedElement(&Element_City_Building<EC>::THE_INSTANCE);
-        this->NeedElement(&Element_City_Car<EC>::THE_INSTANCE);
-        this->NeedElement(&Element_City_Intersection<EC>::THE_INSTANCE);
-        this->NeedElement(&Element_City_Park<EC>::THE_INSTANCE);
-        this->NeedElement(&Element_City_Sidewalk<EC>::THE_INSTANCE);
-        this->NeedElement(&Element_City_Street<EC>::THE_INSTANCE);
+        this->NeedElement(&Element_City_Building<EC>::THE_INSTANCE);//0xCE1b
+        this->NeedElement(&Element_City_Car<EC>::THE_INSTANCE);//0xCE1c
+        this->NeedElement(&Element_City_Intersection<EC>::THE_INSTANCE);//0xCE1d
+        this->NeedElement(&Element_City_Park<EC>::THE_INSTANCE);//0xCE1e
+        this->NeedElement(&Element_City_Sidewalk<EC>::THE_INSTANCE);//0xCE1f
+        this->NeedElement(&Element_City_Street<EC>::THE_INSTANCE);//0xCE20
       }
     }
 
@@ -220,8 +248,8 @@ namespace MFM
     {
       fprintf(stderr, "Supported tile types\n");
 
-#define XX(A,B) \
-    fprintf(stderr, "  Type '%s': %d non-cache sites (%d x %d site storage)\n", #A, (B-8)*(B-8), B, B);
+#define XX(A,B,C)							\
+    fprintf(stderr, "  Type '%s': %d non-cache sites (%d x %d site storage)\n", #A, (B-8)*(C-8), B, C);
 #include "TileSizes.inc"
 #undef XX
 
@@ -231,8 +259,8 @@ namespace MFM
 
   public:
 
-    MFMCDriver(u32 gridWidth, u32 gridHeight)
-      : Super(gridWidth, gridHeight)
+    MFMCDriver(u32 gridWidth, u32 gridHeight, GridLayoutPattern gridLayout)
+      : Super(gridWidth, gridHeight, gridLayout)
       , m_stamper(*this)
     {
       MFM::LOG.SetTimeStamper(&m_stamper);
@@ -260,16 +288,80 @@ namespace MFM
     virtual void OnceOnly(VArguments& args)
     {
       Super::OnceOnly(args);
+      if (this->m_includeCPPDemos && this->m_elementRegistry.GetLibraryPathsCount() > 0)
+        args.Die("Cannot include ulam elements when using --cpp-demos");
     }
 
     virtual void ReinitEden()
-    { }
+    {
+      OurGrid & mainGrid = this->GetGrid();
+      { // Set up edenseed if any
+        const u8 * edenSeedSymbol = this->GetEdenSeedSymbol();
+        if (edenSeedSymbol != 0) {
+          const Element<EC> * elt = mainGrid.LookupElementFromSymbol(edenSeedSymbol);
+          if (!elt)
+            FAIL(UNKNOWN_ELEMENT);
+          // Halfway across and a third down, maybe land in hidden
+          SPoint aloc(mainGrid.GetWidthSites()/2,mainGrid.GetHeightSites()/3);
+          mainGrid.PlaceAtom(elt->GetDefaultAtom(), aloc);
+        }
+      }
+      { // Try to enable ulam5 ByteStreamLogger unless stingy logging
+        if (LOG.GetLevel() >= Logger::MESSAGE) {
+          Element<EC> * elt = mainGrid.LookupElementFromSymbol((const u8 *) "U5");
+          bool found = false;
+          if (elt) {
+            ElementParameters<EC> & parms = elt->GetElementParameters();
+            u32 totalParms = parms.GetParameterCount();
+            for(u32 i = 0; i < totalParms; i++)
+            {
+              ElementParameter<EC> * parm = parms.GetParameter(i);
+              if (parm->GetType() == VD::BOOL &&
+                  !strcmp(parm->GetTag(),"pLOG_ENABLED"))
+              {
+                found = true;
+                parm->SetValueBool(true);
+                break;
+              }
+            }
+          }
+          if (!found)
+          {
+            LOG.Debug("Can't find U5 to enable logging");
+          }
+        }
+      }
+    }
   };
 
   template <class CONFIG>
-  int SimRunner(int argc, const char** argv,u32 gridWidth,u32 gridHeight)
+  struct SnapshotGlobalHook : GlobalHook {
+    SnapshotGlobalHook(MFMCDriver<CONFIG> & driver)
+      : GlobalHook("RequestSnapshot")
+      , m_driver(driver)
+    {
+      GlobalHooks& hooks = GlobalHooks::getSingleton();
+      hooks.addHook(*this);
+    }
+    virtual void * hookHandler(void * varg) {
+      MFM_API_ASSERT_NONNULL(varg);
+      const char * arg = (const char *) varg;
+      OString512 ocbs(arg);     // copy path onto stack?
+      CharBufferByteSource cbbs = ocbs.AsByteSource();
+      m_driver.RequestSnapshot(cbbs);
+      return 0;
+    }
+    MFMCDriver<CONFIG> & m_driver;
+  };
+
+  template <class CONFIG>
+  int SimRunner(int argc, const char** argv,u32 gridWidth,u32 gridHeight, GridLayoutPattern gridLayout)
   {
-    MFMCDriver<CONFIG> sim(gridWidth,gridHeight);
+    SizedTile<typename CONFIG::EVENT_CONFIG, CONFIG::TILE_WIDTH, CONFIG::TILE_HEIGHT, CONFIG::EVENT_HISTORY_SIZE>::SetGridLayoutPattern(gridLayout); //static before sim (next line)
+
+    MFMCDriver<CONFIG> sim(gridWidth,gridHeight,gridLayout);
+    XXXDRIVER = &sim;
+    SnapshotGlobalHook<CONFIG> sgh(sim);
     sim.ProcessArguments(argc, argv);
     sim.AddInternalLogging();
     sim.Init();
@@ -282,7 +374,7 @@ namespace MFM
      grid sizing (since we're not in core/ here).  But it shouldn't
      hurt anything so for now anyway we're leaving it in. */
   template <class CONFIG>
-  int SimCheckAndRun(int argc, const char** argv, u32 gridWidth, u32 gridHeight)
+  int SimCheckAndRun(int argc, const char** argv, u32 gridWidth, u32 gridHeight, GridLayoutPattern gridLayout)
   {
     struct rlimit lim;
     if (getrlimit(RLIMIT_STACK, &lim))
@@ -307,16 +399,19 @@ namespace MFM
         }
       }
     }
-    return SimRunner<CONFIG>(argc,argv,gridWidth,gridHeight);
+
+    return SimRunner<CONFIG>(argc,argv,gridWidth,gridHeight,gridLayout);
   }
 
   int SimRunConfig(const GridConfigCode & gcc, int argc, const char** argv)
   {
     u32 w = gcc.gridWidth;
     u32 h = gcc.gridHeight;
+    GridLayoutPattern l = gcc.gridLayout;
+
     switch (gcc.tileType)
     {
-#define XX(A,B) case GridConfigCode::Tile##A: return SimCheckAndRun<OurGridConfigTile##A>(argc, argv, w, h);
+#define XX(A,B,C) case GridConfigCode::Tile##A: return SimCheckAndRun<OurGridConfigTile##A>(argc, argv, w, h, l);
 #include "TileSizes.inc"
 #undef XX
     default:
@@ -356,7 +451,8 @@ namespace MFM
     if (!CheckForConfigCode(gcc,argc,argv))
     {
       // Default anything still unset
-      gcc.SetTileType(GridConfigCode::TileD);
+      gcc.SetTileType(GridConfigCode::TileH);
+      gcc.SetGridLayout(GRID_LAYOUT_STAGGERED);
       gcc.SetGridWidth(2);
       gcc.SetGridHeight(2);
     }
@@ -365,23 +461,45 @@ namespace MFM
   }
 }
 
-void DP(const MFM::UlamContext<MFM::OurEventConfigAll>& ruc, 
+#define XX(A,B,C) \
+void XXXCC##A()  __attribute__ ((used)) ;  \
+void XXXCC##A() { \
+  if (!XXXDRIVER) abort(); \
+  ((MFM::AbstractDriver<MFM::OurGridConfigTile##A>*) XXXDRIVER)->XXXCHECKCACHES(); \
+}
+#include "TileSizes.inc"
+#undef XX
+
+#if 0 ///XXX DELETE ME
+//BARF. BARF BARF BARF.
+#include "AbstractDriver.h"
+
+namespace MFM {
+  extern bool RequestSnapshotGlobal(const char * path) __attribute__ ((used)) ;
+  extern bool RequestSnapshotGlobal(const char * path) {
+    AbstractDriverBase * bptr = (AbstractDriverBase *) XXXDRIVER;
+    return bptr->RequestSnapshot(path);
+  }
+}
+#endif
+
+void DP(const MFM::UlamContext<MFM::OurEventConfigAll>& ruc,
         const MFM::UlamRef<MFM::OurEventConfigAll>& rur) __attribute__ ((used)) ;
-void DP(const MFM::UlamContext<MFM::OurEventConfigAll>& ruc, 
+void DP(const MFM::UlamContext<MFM::OurEventConfigAll>& ruc,
         const MFM::AtomBitStorage<MFM::OurEventConfigAll>& abs) __attribute__ ((used)) ;
 
-void DP(const MFM::UlamContext<MFM::OurEventConfigAll>& ruc, 
+void DP(const MFM::UlamContext<MFM::OurEventConfigAll>& ruc,
         const MFM::AtomBitStorage<MFM::OurEventConfigAll>& abs)
 {
-  MFM::DebugPrint<MFM::OurEventConfigAll>(ruc, abs, MFM::STDERR);  
+  MFM::DebugPrint<MFM::OurEventConfigAll>(ruc, abs, MFM::STDERR);
   MFM::STDERR.Printf("\n");
 }
 
 
-void DP(const MFM::UlamContext<MFM::OurEventConfigAll>& ruc, 
+void DP(const MFM::UlamContext<MFM::OurEventConfigAll>& ruc,
         const MFM::UlamRef<MFM::OurEventConfigAll>& rur)
 {
-  MFM::DebugPrint<MFM::OurEventConfigAll>(ruc, rur, MFM::STDERR);  
+  MFM::DebugPrint<MFM::OurEventConfigAll>(ruc, rur, MFM::STDERR);
   MFM::STDERR.Printf("\n");
 }
 
